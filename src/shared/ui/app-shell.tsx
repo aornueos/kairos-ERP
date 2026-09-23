@@ -8,8 +8,11 @@ import {
   Home,
   Landmark,
   ListChecks,
+  LogOut,
   ShoppingCart,
 } from 'lucide-react'
+import { sair } from '@/shared/auth/sair'
+import { Botao } from './botao'
 import { cn } from './utils'
 
 /**
@@ -106,6 +109,11 @@ export function AppShell({
                 {usuario.email}
               </p>
             </div>
+            <form action={sair}>
+              <Botao type="submit" variante="sutil" tamanho="icone" aria-label="Sair">
+                <LogOut aria-hidden />
+              </Botao>
+            </form>
           </div>
         </header>
 

@@ -47,6 +47,23 @@ test.describe('acesso ao sistema', () => {
     )
   })
 
+  test('sair encerra a sessão e protege as rotas de novo', async ({ page }) => {
+    test.skip(!SENHA, 'Defina E2E_SENHA com a senha gerada pelo seed base.')
+
+    await page.goto('/login')
+    await page.getByLabel('E-mail').fill(EMAIL)
+    await page.getByLabel('Senha').fill(SENHA)
+    await page.getByRole('button', { name: 'Entrar' }).click()
+    await expect(page).toHaveURL('/')
+
+    await page.getByRole('button', { name: 'Sair' }).click()
+    await expect(page).toHaveURL(/\/login/)
+
+    // A sessão acabou de fato: voltar para a tela inicial exige login.
+    await page.goto('/')
+    await expect(page).toHaveURL(/\/login/)
+  })
+
   test('a tela de login não tem violação séria de acessibilidade', async ({ page }) => {
     await page.goto('/login')
 

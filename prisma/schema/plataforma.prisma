@@ -1,0 +1,103 @@
+// Contexto: plataforma
+// Infraestrutura transversal — auditoria, outbox de eventos, parâmetros e arquivos.
+
+enum TipoAtor {
+  USUARIO
+  TOKEN_API
+  JOB
+  IMPORTACAO
+  SISTEMA
+}
+
+enum TipoParametro {
+  TEXTO
+  NUMERO
+  DECIMAL
+  BOOLEANO
+  DATA
+  JSON
+}
+
+/// Trilha de auditoria. Imutável: a aplicação não tem privilégio de update nem delete.
+model Auditoria {
+  id         String   @id @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  entidade   String   @db.VarChar(60)
+  entidadeId String   @map("entidade_id") @db.Uuid
+  acao       String   @db.VarChar(30)
+  atorTipo   TipoAtor @map("ator_tipo")
+  atorId     String?  @map("ator_id") @db.Uuid
+  origem     String?  @db.VarChar(120)
+  antes      Json?
+  depois     Json?
+  ocorridoEm DateTime @default(now()) @map("ocorrido_em") @db.Timestamptz(3)
+
+  @@index([tenantId, entidade, entidadeId, ocorridoEm])
+  @@index([tenantId, atorId, ocorridoEm])
+  @@map("auditoria")
+}
+
+/// Evento de domínio gravado na mesma transação da mudança de estado.
+/// Um publisher enfileira o que está com publicado_em nulo.
+model EventoOutbox {
+  id          String    @id @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  tipo        String    @db.VarChar(80)
+  versao      Int       @default(1)
+  agregadoId  String    @map("agregado_id") @db.Uuid
+  payload     Json
+  ocorridoEm  DateTime  @default(now()) @map("ocorrido_em") @db.Timestamptz(3)
+  publicadoEm DateTime? @map("publicado_em") @db.Timestamptz(3)
+  tentativas  Int       @default(0)
+  ultimoErro  String?   @map("ultimo_erro")
+
+  @@index([publicadoEm, ocorridoEm])
+  @@index([tenantId, tipo, ocorridoEm])
+  @@map("evento_outbox")
+}
+
+/// Controle de idempotência do consumo de eventos.
+model EventoConsumo {
+  tenantId   String   @map("tenant_id") @db.Uuid
+  tipo       String   @db.VarChar(80)
+  agregadoId String   @map("agregado_id") @db.Uuid
+  consumidor String   @db.VarChar(80)
+  consumidoEm DateTime @default(now()) @map("consumido_em") @db.Timestamptz(3)
+
+  @@id([tipo, agregadoId, consumidor])
+  @@index([tenantId, consumidoEm])
+  @@map("evento_consumo")
+}
+
+/// Parâmetro de negócio por tenant. Nunca use variável de ambiente para isto.
+model Parametro {
+  tenantId    String        @map("tenant_id") @db.Uuid
+  chave       String        @db.VarChar(80)
+  valor       String
+  tipo        TipoParametro
+  descricao   String?
+  alteradoPor String?       @map("alterado_por") @db.Uuid
+  alteradoEm  DateTime      @updatedAt @map("alterado_em") @db.Timestamptz(3)
+
+  @@id([tenantId, chave])
+  @@map("parametro")
+}
+
+/// Metadados de arquivo armazenado no S3. O conteúdo nunca fica no banco.
+model Arquivo {
+  id            String   @id @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  chave         String
+  nomeOriginal  String   @map("nome_original")
+  tipoMime      String   @map("tipo_mime") @db.VarChar(120)
+  tamanho       Int
+  hashSha256    String   @map("hash_sha256") @db.VarChar(64)
+  entidade      String?  @db.VarChar(60)
+  entidadeId    String?  @map("entidade_id") @db.Uuid
+  criadoPor     String?  @map("criado_por") @db.Uuid
+  criadoEm      DateTime @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  @@unique([tenantId, chave])
+  @@index([tenantId, entidade, entidadeId])
+  @@map("arquivo")
+}

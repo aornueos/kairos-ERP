@@ -6,7 +6,7 @@ for tomada ou uma fase for concluída.
 
 - Produto: **KAIROS** — ERP da **Pure.us**, indústria de cosméticos capilares
 - Última atualização: 2026-09-22
-- Estado: desenho concluído, implementação não iniciada
+- Estado: **fase 0 (fundação) concluída e verificada**; fase 1 é a próxima
 
 ---
 
@@ -40,19 +40,20 @@ Registradas em ADR. Não as contrarie sem escrever um ADR novo.
 
 | # | Decisão | Arquivo |
 |---|---|---|
-| 0001 | Stack Next.js 15 + Prisma + PostgreSQL 16, monolito TypeScript | [docs/adr/0001](docs/adr/0001-stack-nextjs-prisma-postgres.md) |
+| 0001 | Stack Next.js + Prisma + PostgreSQL 16, monolito TypeScript | [docs/adr/0001](docs/adr/0001-stack-nextjs-prisma-postgres.md) |
 | 0002 | Emissão fiscal por provedor externo (não direto na SEFAZ) | [docs/adr/0002](docs/adr/0002-emissao-fiscal-por-provedor-externo.md) |
 | 0003 | Multi-tenancy por `tenant_id` com Row Level Security | [docs/adr/0003](docs/adr/0003-multi-tenancy-tenant-id-com-rls.md) |
 | 0004 | Monolito modular; microsserviços rejeitados | [docs/adr/0004](docs/adr/0004-monolito-modular.md) |
+| 0005 | Exceção de RLS para o bootstrap da autenticação | [docs/adr/0005](docs/adr/0005-excecao-de-rls-para-autenticacao.md) |
 
 ### Stack fixada
 
 | Camada | Escolha |
 |---|---|
-| Runtime | Node 22 LTS, TypeScript estrito |
-| Aplicação | Next.js 15 App Router (Server Actions internas, Route Handlers para API externa) |
-| Banco | PostgreSQL 16 com Prisma 6 |
-| Interface | Tailwind + shadcn/ui, React Hook Form, Zod |
+| Runtime | Node 22+, TypeScript 6 estrito (ver ADR-0001 sobre TS 6 x 7) |
+| Aplicação | Next.js 16 App Router (Server Actions internas, Route Handlers para API externa) |
+| Banco | PostgreSQL 16 com Prisma 7 (driver adapter `@prisma/adapter-pg`) |
+| Interface | Tailwind 4, React Hook Form, Zod 4 |
 | Autenticação | Auth.js v5 (credenciais) + RBAC em banco |
 | Filas | pg-boss (no próprio PostgreSQL) |
 | Arquivos | S3-compatível: MinIO local, R2/S3 em produção |
@@ -74,9 +75,24 @@ folha de pagamento, emissão fiscal direto na SEFAZ.
 4. Criação de **97 skills de projeto** em `.claude/skills/`, todas com frontmatter
    validado e referências cruzadas conferidas.
 5. Criação dos ADRs 0001 a 0004.
-6. Este documento.
+6. **Fase 0 implementada e verificada** (seção 7), com o ADR-0005 registrando a única
+   exceção de arquitetura que apareceu no caminho.
 
-Nada de código de aplicação foi escrito ainda. O próximo passo é a Fase 0 (seção 7).
+### Dois defeitos encontrados e corrigidos na fase 0
+
+Valem registro porque nenhum dos dois apareceria em revisão de código — só rodando.
+
+**A policy de RLS quebrava em vez de esconder.** Sem contexto de tenant,
+`current_setting('app.tenant_id', true)` devolve string vazia, e `''::uuid` levanta erro
+de sintaxe. Uma consulta que escapasse do helper de tenant recebia erro de banco em vez
+de zero linhas. Corrigido com `nullif(...)`, que faz a comparação virar NULL e a consulta
+devolver nada — que é o comportamento correto. Coberto por teste.
+
+**O login não podia funcionar.** `usuario_tenant` é a tabela que diz a qual empresa a
+pessoa pertence, e tinha RLS por tenant. No login ainda não se sabe o tenant, então a
+policy escondia justamente a linha necessária: impasse de bootstrap. Resolvido com uma
+policy adicional restrita a `SELECT` e a um contexto declarado em um único ponto do
+código (ADR-0005), com teste fixando que ela não libera escrita nem as outras tabelas.
 
 ---
 
@@ -260,23 +276,26 @@ Nunca `float` para valor. Nunca `timestamp` sem fuso. Ver skill `database-schema
 
 Cada fase termina com software em produção e usado. Fase que não é usada não terminou.
 
-### Fase 0 — Fundação (2 a 3 semanas)
+### Fase 0 — Fundação — CONCLUÍDA em 2026-09-22
 
-Sem valor visível para o usuário, mas tudo depende dela.
+- [x] Projeto Next.js com TypeScript estrito e ESLint com as regras de fronteira
+- [x] `docker-compose.yml` (Postgres, MinIO, Mailpit) e `.env.example`
+- [x] Prisma com schema por contexto, migration inicial e `scripts/check-rls.ts`
+- [x] Contexto de tenant (`comTenant`) e policies de RLS forçadas em 10 tabelas
+- [x] Auth.js v5, modelo de usuário, perfis e 48 permissões; matriz no seed
+- [x] `shared/ui` com componentes base e tokens do design system (claro e escuro)
+- [x] Logger estruturado com redação, hierarquia de erros e contexto de requisição
+- [x] pg-boss com o publisher da outbox e a tela de Processos
+- [x] Pipeline de CI: lint, tipos, unit, migrations, RLS, integração, build, E2E, segurança
+- [x] Seed base: 27 UFs, 13 municípios, 10 NCMs, 16 CFOPs, 10 bancos, 9 unidades,
+      tenant Pure.us, 7 perfis e o primeiro administrador
 
-- [ ] Projeto Next.js 15 com TypeScript estrito, ESLint com as regras de fronteira
-- [ ] `docker-compose.yml` (Postgres, MinIO, Mailpit) e `.env.example`
-- [ ] Prisma com schema por módulo, primeira migration, script `check-rls.ts`
-- [ ] Extensão de tenant no Prisma Client e policies de RLS
-- [ ] Auth.js v5, modelo de usuário, perfil e permissões; matriz do seed
-- [ ] `shared/ui` com os componentes base e os tokens do design system
-- [ ] Logger, tratamento de erros e contexto de requisição
-- [ ] pg-boss com um job de exemplo e a tela de processos
-- [ ] Pipeline de CI completo (lint, tipos, unit, integração, build, E2E, segurança, RLS)
-- [ ] Seed base (UF, município, NCM, CFOP, bancos, plano de contas, perfis)
+**Critério de aceite: atendido.** O login funciona ponta a ponta contra PostgreSQL real,
+a tela inicial abre com a empresa e o usuário, e há teste de integração provando que o
+tenant A não lê, não altera e não apaga dado do tenant B.
 
-**Critério de aceite:** um usuário entra, vê a tela inicial vazia, e existe um teste de
-integração provando que o tenant A não lê dado do tenant B.
+Não entrou (e não fazia parte do critério): MinIO e Mailpit não foram exercitados, porque
+upload e e-mail só entram na fase 1.
 
 ### Fase 1 — Núcleo operacional (8 a 12 semanas)
 
@@ -334,7 +353,10 @@ fatura, recebe e fecha o caixa — sem planilha paralela.
 
 ### 8.1 Pré-requisitos
 
-Node 22 LTS, pnpm, Docker Desktop, Git. Windows, macOS ou Linux.
+Node 22+, pnpm, Docker, Git. Windows, macOS ou Linux.
+
+Sem Docker na máquina? O PostgreSQL pode rodar a partir de binários portáveis, sem
+privilégio de administrador: ver `docs/operacao/postgres-sem-docker.md`.
 
 ### 8.2 Clonar e preparar
 
@@ -344,15 +366,25 @@ cd kairos-ERP
 cp .env.example .env.local
 docker compose up -d
 pnpm install
-pnpm prisma migrate deploy
-pnpm seed:base
-pnpm seed:demo
-pnpm dev      # em um terminal
-pnpm worker   # em outro
+pnpm db:deploy
+pnpm seed:base     # imprime a senha do admin uma única vez
+pnpm dev           # em um terminal
+pnpm worker        # em outro
 ```
 
-Enquanto a Fase 0 não estiver concluída, só existem a documentação e as skills; os
-comandos acima passam a valer conforme o projeto for criado.
+Abra `http://localhost:3000` e entre com `admin@pureus.local` e a senha que o
+`seed:base` imprimiu. Em produção o seed não cria usuário: use `pnpm admin:criar`.
+
+Verificação de que está tudo certo:
+
+```bash
+pnpm verify        # lint + tipos + testes unitários
+pnpm check:rls     # isolamento por tenant
+pnpm test:int      # integração (exige banco; ver TEST_DATABASE_URL)
+pnpm e2e           # jornadas críticas
+```
+
+`pnpm seed:demo` (massa fictícia da Pure.us) entra na fase 1.
 
 ### 8.3 Skills
 
@@ -425,4 +457,26 @@ Atualize ao fim de cada etapa.
 | 2026-09-22 | Skills do projeto (97) criadas e validadas | concluído |
 | 2026-09-22 | ADRs 0001 a 0004 | concluído |
 | 2026-09-22 | Desenho do ERP e roadmap | concluído |
-| — | Fase 0 — Fundação | não iniciada |
+| 2026-09-22 | Fase 0 — Fundação | concluído |
+| 2026-09-22 | ADR-0005 (exceção de RLS para autenticação) | concluído |
+| — | Fase 1 — Cadastros e estoque | próxima |
+
+### Verificação executada na conclusão da fase 0
+
+| Verificação | Resultado |
+|---|---|
+| `pnpm lint` | sem erros |
+| `pnpm typecheck` | sem erros |
+| `pnpm format:check` | conforme |
+| `pnpm test` (unitários) | 31 passaram |
+| `pnpm test:int` (integração, Postgres real) | 14 passaram |
+| `pnpm check:rls` | 10 tabelas isoladas, 9 globais |
+| `pnpm build` | 6 rotas compiladas |
+| `pnpm e2e` (Playwright + axe) | 5 passaram |
+| Login manual no navegador | entra, tela inicial abre com a empresa |
+| Worker `pnpm worker` | sobe, registra a fila, processa job |
+
+O ambiente de verificação desta máquina não tem Docker: o PostgreSQL 16.11 roda a partir
+de binários portáveis (ver `docs/operacao/postgres-sem-docker.md`), com role da aplicação
+`NOSUPERUSER NOBYPASSRLS` para que o isolamento seja testado de verdade. O CI continua
+usando o serviço de PostgreSQL do runner.

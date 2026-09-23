@@ -1,0 +1,52 @@
+# Infraestrutura de desenvolvimento do KAIROS.
+# A aplicação roda no host (pnpm dev), não aqui, para manter o hot reload.
+# Sem Docker na máquina? Ver docs/operacao/postgres-sem-docker.md.
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: kairos-db
+    environment:
+      POSTGRES_USER: kairos
+      POSTGRES_PASSWORD: kairos
+      POSTGRES_DB: kairos
+      TZ: America/Sao_Paulo
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U kairos -d kairos']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: kairos-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Captura os e-mails do ambiente local. Interface em http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: kairos-mailpit
+    ports:
+      - '8025:8025'
+      - '1025:1025'
+
+volumes:
+  pgdata:
+  miniodata:

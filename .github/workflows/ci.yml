@@ -1,0 +1,156 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  KAIROS_ENV: dev
+  TZ: America/Sao_Paulo
+  AUTH_SECRET: segredo-de-ci-com-mais-de-trinta-e-dois-caracteres
+  DATABASE_URL: postgresql://kairos:kairos@localhost:5432/kairos?schema=public
+
+jobs:
+  # Etapas rápidas em paralelo: feedback em poucos minutos.
+  estatica:
+    name: Lint, tipos e testes unitários
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma generate
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm format:check
+
+  banco:
+    name: Migrations, RLS e integração
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kairos
+          POSTGRES_PASSWORD: kairos
+          POSTGRES_DB: kairos
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U kairos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma generate
+
+      - name: Aplicar migrations
+        run: pnpm db:deploy
+
+      # Gate de isolamento: tabela com tenant_id sem policy reprova o PR.
+      - name: Verificar RLS
+        run: pnpm check:rls
+
+      - name: Seed base
+        run: pnpm seed:base
+
+      - name: Testes de integração
+        env:
+          TEST_DATABASE_URL: postgresql://kairos:kairos@localhost:5432/kairos_int?schema=public
+        run: |
+          PGPASSWORD=kairos psql -h localhost -U kairos -d kairos -c 'CREATE DATABASE kairos_int;'
+          pnpm test:int
+
+  build:
+    name: Build de produção
+    runs-on: ubuntu-latest
+    needs: estatica
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+  e2e:
+    name: Jornadas críticas
+    runs-on: ubuntu-latest
+    needs: [estatica, banco]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kairos
+          POSTGRES_PASSWORD: kairos
+          POSTGRES_DB: kairos
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U kairos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma generate
+      - run: pnpm db:deploy
+
+      - name: Seed base e captura da senha do admin
+        run: |
+          pnpm seed:base | tee /tmp/seed.log
+          echo "E2E_SENHA=$(grep -oP 'senha\s*:\s*\K\S+' /tmp/seed.log)" >> "$GITHUB_ENV"
+
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  seguranca:
+    name: Dependências e segredos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Auditoria de dependências
+        run: pnpm audit --audit-level high
+      - name: Varredura de segredos
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,52 @@
+# dependências
+node_modules/
+.pnpm-store/
+
+# build
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+next-env.d.ts
+
+# ambiente e segredos
+.env
+.env.local
+.env.*.local
+*.pem
+*.pfx
+*.p12
+certificados/
+
+# testes
+coverage/
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
+# prisma — o cliente é gerado por `prisma generate`, que roda no build e no CI
+src/generated/
+prisma/generated/
+
+# dados locais
+pgdata/
+minio-data/
+uploads/
+
+# sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# editores
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+.idea/
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*

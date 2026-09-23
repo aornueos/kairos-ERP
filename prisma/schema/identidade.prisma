@@ -1,0 +1,155 @@
+// Contexto: identidade
+// Tenant, usuários, vínculos, perfis e permissões.
+// Regra: tabelas com tenant_id recebem RLS na migration (ver skill multi-tenancy).
+
+enum RegimeTributario {
+  SIMPLES_NACIONAL
+  LUCRO_PRESUMIDO
+  LUCRO_REAL
+}
+
+enum AmbienteTenant {
+  PRODUCAO
+  HOMOLOGACAO
+  DEMONSTRACAO
+}
+
+enum SituacaoVinculo {
+  ATIVO
+  SUSPENSO
+  ENCERRADO
+}
+
+/// Empresa atendida pelo KAIROS. Tabela global: não possui tenant_id.
+model Tenant {
+  id                 String           @id @db.Uuid
+  razaoSocial        String           @map("razao_social")
+  nomeFantasia       String?          @map("nome_fantasia")
+  cnpj               String           @unique @db.VarChar(14)
+  inscricaoEstadual  String?          @map("inscricao_estadual") @db.VarChar(20)
+  inscricaoMunicipal String?          @map("inscricao_municipal") @db.VarChar(20)
+  regimeTributario   RegimeTributario @map("regime_tributario")
+  ambiente           AmbienteTenant   @default(PRODUCAO)
+  municipioIbge      String?          @map("municipio_ibge") @db.VarChar(7)
+  logradouro         String?
+  numero             String?          @db.VarChar(20)
+  complemento        String?
+  bairro             String?
+  cep                String?          @db.VarChar(8)
+  telefone           String?          @db.VarChar(20)
+  email              String?
+  ativo              Boolean          @default(true)
+  criadoEm           DateTime         @default(now()) @map("criado_em") @db.Timestamptz(3)
+  atualizadoEm       DateTime         @updatedAt @map("atualizado_em") @db.Timestamptz(3)
+
+  municipio Municipio?      @relation(fields: [municipioIbge], references: [codigoIbge], onDelete: Restrict)
+  vinculos  UsuarioTenant[]
+  perfis    Perfil[]
+
+  @@index([ativo])
+  @@map("tenant")
+}
+
+/// Pessoa que acessa o sistema. Global: o mesmo usuário pode servir vários tenants.
+model Usuario {
+  id             String    @id @db.Uuid
+  nome           String
+  email          String    @unique
+  senhaHash      String    @map("senha_hash")
+  mfaSegredo     String?   @map("mfa_segredo")
+  mfaAtivo       Boolean   @default(false) @map("mfa_ativo")
+  ativo          Boolean   @default(true)
+  falhasLogin    Int       @default(0) @map("falhas_login")
+  bloqueadoAte   DateTime? @map("bloqueado_ate") @db.Timestamptz(3)
+  ultimoAcessoEm DateTime? @map("ultimo_acesso_em") @db.Timestamptz(3)
+  senhaAlteradaEm DateTime @default(now()) @map("senha_alterada_em") @db.Timestamptz(3)
+  criadoEm       DateTime  @default(now()) @map("criado_em") @db.Timestamptz(3)
+  atualizadoEm   DateTime  @updatedAt @map("atualizado_em") @db.Timestamptz(3)
+
+  vinculos UsuarioTenant[]
+
+  @@index([ativo])
+  @@map("usuario")
+}
+
+/// Vínculo entre usuário e tenant, com escopo opcional (depósitos, filiais, carteira).
+model UsuarioTenant {
+  id        String          @id @db.Uuid
+  tenantId  String          @map("tenant_id") @db.Uuid
+  usuarioId String          @map("usuario_id") @db.Uuid
+  situacao  SituacaoVinculo @default(ATIVO)
+  escopo    Json?
+  criadoEm  DateTime        @default(now()) @map("criado_em") @db.Timestamptz(3)
+  atualizadoEm DateTime     @updatedAt @map("atualizado_em") @db.Timestamptz(3)
+
+  tenant  Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  usuario Usuario               @relation(fields: [usuarioId], references: [id], onDelete: Restrict)
+  perfis  UsuarioTenantPerfil[]
+
+  @@unique([tenantId, usuarioId])
+  @@index([tenantId, situacao])
+  @@index([usuarioId])
+  @@map("usuario_tenant")
+}
+
+/// Conjunto nomeado de permissões, por tenant.
+model Perfil {
+  id           String   @id @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  codigo       String   @db.VarChar(40)
+  nome         String
+  descricao    String?
+  sistema      Boolean  @default(false)
+  ativo        Boolean  @default(true)
+  criadoEm     DateTime @default(now()) @map("criado_em") @db.Timestamptz(3)
+  atualizadoEm DateTime @updatedAt @map("atualizado_em") @db.Timestamptz(3)
+
+  tenant     Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  permissoes PerfilPermissao[]
+  usuarios   UsuarioTenantPerfil[]
+
+  @@unique([tenantId, codigo])
+  @@index([tenantId, ativo])
+  @@map("perfil")
+}
+
+/// Permissão concedida a um perfil. A string segue <modulo>.<recurso>.<acao>.
+model PerfilPermissao {
+  tenantId  String @map("tenant_id") @db.Uuid
+  perfilId  String @map("perfil_id") @db.Uuid
+  permissao String @db.VarChar(80)
+
+  perfil Perfil @relation(fields: [perfilId], references: [id], onDelete: Cascade)
+
+  @@id([perfilId, permissao])
+  @@index([tenantId, permissao])
+  @@map("perfil_permissao")
+}
+
+model UsuarioTenantPerfil {
+  tenantId        String @map("tenant_id") @db.Uuid
+  usuarioTenantId String @map("usuario_tenant_id") @db.Uuid
+  perfilId        String @map("perfil_id") @db.Uuid
+
+  usuarioTenant UsuarioTenant @relation(fields: [usuarioTenantId], references: [id], onDelete: Cascade)
+  perfil        Perfil        @relation(fields: [perfilId], references: [id], onDelete: Cascade)
+
+  @@id([usuarioTenantId, perfilId])
+  @@index([tenantId, perfilId])
+  @@map("usuario_tenant_perfil")
+}
+
+/// Concessão ou revogação pontual de permissão, fora do perfil. Sempre auditada.
+model UsuarioPermissao {
+  id        String   @id @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  usuarioId String   @map("usuario_id") @db.Uuid
+  permissao String   @db.VarChar(80)
+  concedida Boolean
+  motivo    String
+  criadoPor String?  @map("criado_por") @db.Uuid
+  criadoEm  DateTime @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  @@unique([tenantId, usuarioId, permissao])
+  @@map("usuario_permissao")
+}

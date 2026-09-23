@@ -1,0 +1,11 @@
+// Datasource e gerador do KAIROS.
+// A URL do banco vem de prisma7.config.ts (DATABASE_URL), não daqui.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}

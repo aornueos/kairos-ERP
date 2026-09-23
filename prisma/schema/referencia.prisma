@@ -1,0 +1,61 @@
+// Contexto: referência
+// Tabelas de domínio compartilhadas por todos os tenants. Sem tenant_id e sem RLS.
+// Carregadas pelo seed base; o usuário não edita.
+
+model Uf {
+  sigla      String @id @db.Char(2)
+  nome       String
+  codigoIbge String @unique @map("codigo_ibge") @db.VarChar(2)
+  regiao     String @db.VarChar(20)
+
+  municipios Municipio[]
+
+  @@map("uf")
+}
+
+model Municipio {
+  codigoIbge String  @id @map("codigo_ibge") @db.VarChar(7)
+  nome       String
+  ufSigla    String  @map("uf_sigla") @db.Char(2)
+  capital    Boolean @default(false)
+
+  uf      Uf       @relation(fields: [ufSigla], references: [sigla], onDelete: Restrict)
+  tenants Tenant[]
+
+  @@index([ufSigla, nome])
+  @@map("municipio")
+}
+
+/// Nomenclatura Comum do Mercosul. Cosmético capilar concentra-se em 3305.
+model Ncm {
+  codigo          String    @id @db.VarChar(8)
+  descricao       String
+  vigenciaInicio  DateTime  @map("vigencia_inicio") @db.Date
+  vigenciaFim     DateTime? @map("vigencia_fim") @db.Date
+
+  @@map("ncm")
+}
+
+model Cfop {
+  codigo    String @id @db.VarChar(4)
+  descricao String
+  tipo      String @db.VarChar(10)
+
+  @@map("cfop")
+}
+
+model Banco {
+  codigo String  @id @db.VarChar(3)
+  nome   String
+  ispb   String? @db.VarChar(8)
+
+  @@map("banco")
+}
+
+model UnidadeMedida {
+  codigo    String @id @db.VarChar(6)
+  descricao String
+  decimais  Int    @default(4)
+
+  @@map("unidade_medida")
+}

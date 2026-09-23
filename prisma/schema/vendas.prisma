@@ -1,0 +1,70 @@
+// Contexto: vendas
+// Romaneio: a tabela de pedido que o comercial envia e recebe do cliente.
+// Pedido de venda com reserva de estoque entra na fase 1, item 5.
+
+enum SituacaoRomaneio {
+  ABERTO
+  CANCELADO
+}
+
+/// Tabela de pedido numerada. Guarda cópia do catálogo no momento da emissão:
+/// mudar o preço do produto depois não altera o que o cliente recebeu.
+model Romaneio {
+  id                 String           @id @db.Uuid
+  tenantId           String           @map("tenant_id") @db.Uuid
+  numero             Int
+  situacao           SituacaoRomaneio @default(ABERTO)
+  clienteRazaoSocial String           @map("cliente_razao_social") @db.VarChar(120)
+  /// CNPJ ou CPF sem máscara.
+  clienteDocumento   String?          @map("cliente_documento") @db.VarChar(14)
+  clienteTelefone    String?          @map("cliente_telefone") @db.VarChar(20)
+  clienteEmail       String?          @map("cliente_email") @db.VarChar(120)
+  clienteEndereco    String?          @map("cliente_endereco") @db.VarChar(250)
+  condicoesPagamento String?          @map("condicoes_pagamento") @db.VarChar(250)
+  descontoPercentual Decimal          @default(0) @map("desconto_percentual") @db.Decimal(5, 2)
+  observacoes        String?          @db.VarChar(1000)
+  vendedorId         String           @map("vendedor_id") @db.Uuid
+  vendedorNome       String           @map("vendedor_nome") @db.VarChar(120)
+  canceladoEm        DateTime?        @map("cancelado_em") @db.Timestamptz(3)
+  criadoEm           DateTime         @default(now()) @map("criado_em") @db.Timestamptz(3)
+  atualizadoEm       DateTime         @updatedAt @map("atualizado_em") @db.Timestamptz(3)
+
+  itens RomaneioItem[]
+
+  @@unique([tenantId, numero])
+  @@index([tenantId, situacao, criadoEm])
+  @@map("romaneio")
+}
+
+/// Linha do romaneio com a cópia dos dados do produto e da linha comercial.
+model RomaneioItem {
+  id            String   @id @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  romaneioId    String   @map("romaneio_id") @db.Uuid
+  produtoId     String   @map("produto_id") @db.Uuid
+  ordem         Int
+  linhaNome     String   @map("linha_nome") @db.VarChar(60)
+  linhaApelo    String?  @map("linha_apelo") @db.VarChar(80)
+  linhaCor      String   @map("linha_cor") @db.VarChar(7)
+  codigo        String   @db.VarChar(20)
+  nome          String   @db.VarChar(120)
+  ean           String?  @db.VarChar(13)
+  dun14         String?  @db.VarChar(14)
+  ncm           String   @db.VarChar(8)
+  cest          String?  @db.VarChar(7)
+  cstCsosn      String   @map("cst_csosn") @db.VarChar(3)
+  comprimentoCm Decimal? @map("comprimento_cm") @db.Decimal(7, 2)
+  larguraCm     Decimal? @map("largura_cm") @db.Decimal(7, 2)
+  alturaCm      Decimal? @map("altura_cm") @db.Decimal(7, 2)
+  preco         Decimal  @db.Decimal(12, 2)
+  caixaMaster   Int      @map("caixa_master")
+  quantidade    Int      @default(0)
+
+  romaneio Romaneio @relation(fields: [romaneioId], references: [id], onDelete: Cascade)
+  produto  Produto  @relation(fields: [produtoId], references: [id], onDelete: Restrict)
+
+  @@unique([romaneioId, produtoId])
+  @@index([tenantId, romaneioId])
+  @@index([tenantId, produtoId])
+  @@map("romaneio_item")
+}

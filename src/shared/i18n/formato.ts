@@ -46,6 +46,19 @@ export function percentual(valor: Numerico): string {
   return `${fmtPercentual.format(paraNumero(valor))}%`
 }
 
+/**
+ * Dimensões de embalagem em centímetros, na ordem comprimento x largura x altura,
+ * como na planilha de pedido: "4,5 x 4,5 x 11". Sem dimensão, retorna vazio.
+ */
+export function dimensoesCm(
+  comprimento: Numerico | null,
+  largura: Numerico | null,
+  altura: Numerico | null,
+): string {
+  if (comprimento == null || largura == null || altura == null) return ''
+  return [comprimento, largura, altura].map((v) => quantidade(v)).join(' x ')
+}
+
 /** Moeda abreviada para cartão de painel. O valor exato fica no detalhe. */
 export function moedaCompacta(valor: Numerico): string {
   const n = paraNumero(valor)

@@ -28,10 +28,12 @@ model Municipio {
 
 /// Nomenclatura Comum do Mercosul. Cosmético capilar concentra-se em 3305.
 model Ncm {
-  codigo          String    @id @db.VarChar(8)
-  descricao       String
-  vigenciaInicio  DateTime  @map("vigencia_inicio") @db.Date
-  vigenciaFim     DateTime? @map("vigencia_fim") @db.Date
+  codigo         String    @id @db.VarChar(8)
+  descricao      String
+  vigenciaInicio DateTime  @map("vigencia_inicio") @db.Date
+  vigenciaFim    DateTime? @map("vigencia_fim") @db.Date
+
+  produtos Produto[]
 
   @@map("ncm")
 }

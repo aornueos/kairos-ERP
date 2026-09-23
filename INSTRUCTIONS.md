@@ -301,6 +301,16 @@ upload e e-mail só entram na fase 1.
 
 O MVP definido com o negócio. Entrega em ordem de dependência:
 
+0. **PRIORIDADE — Romaneio (tabela de pedido) em PDF e Excel.** Primeira coisa da
+   fase 1, antecipada porque é a ferramenta de venda do comercial. Versão melhorada da
+   planilha que a Pure.us já usa: mantém todas as colunas (código, EAN, CST/CSOSN, NCM,
+   DUN-14, CEST, dimensões, produto, preço, preço com desconto, caixa master,
+   quantidade, total), os blocos de cliente, condições de pagamento e desconto, e as
+   cores por linha de produto. Acrescenta: numeração com código de barras, dados do
+   fornecedor, fórmulas vivas no Excel com campos do cliente liberados e o resto
+   protegido, contagem de caixas com alerta de caixa aberta, resumo com bruto,
+   desconto e total, validação de EAN/DUN-14 e tabela em branco para o cliente
+   preencher. Estado detalhado em [Romaneio: estado](#romaneio-estado).
 1. **Cadastros**: parceiro, produto e insumo com controle de lote, unidades, depósitos,
    tabela de preços. Importação por planilha desde já.
 2. **Estoque**: movimentação, saldo por lote, FEFO, custo médio, transferência,
@@ -319,6 +329,47 @@ O MVP definido com o negócio. Entrega em ordem de dependência:
 
 **Critério de aceite:** a Pure.us opera um mês inteiro no KAIROS — compra, produz, vende,
 fatura, recebe e fecha o caixa — sem planilha paralela.
+
+#### Romaneio: estado
+
+Em andamento. Exemplo gerável sem banco nem login: `pnpm exemplo:romaneio [pasta]`
+produz o romaneio de exemplo e a tabela em branco, em PDF e Excel.
+
+Pronto e verificado:
+
+- tabelas `linha_produto`, `produto`, `romaneio`, `romaneio_item` com RLS forçada e
+  restrições no banco (migration `20260923120000_romaneio`);
+- permissões `vendas.romaneio.ler`, `.criar` e `.cancelar`, com a matriz dos perfis;
+- validação de EAN-13 e DUN-14 e derivação do DUN pelo EAN
+  (`src/modules/cadastros/domain/gtin.ts`);
+- cálculo do romaneio no domínio, idêntico às fórmulas do Excel
+  (`src/modules/vendas/domain/calculo-romaneio.ts`);
+- casos de uso e repositório do catálogo, com auditoria de alterações;
+- geradores de PDF e Excel (`src/modules/vendas/infra/documentos/`), conferidos
+  visualmente e, no caso do Excel, abertos e recalculados no próprio Excel;
+- catálogo real transcrito da planilha (`prisma/seed/base/catalogo-pureus.ts`).
+
+Falta:
+
+- repositório e casos de uso do romaneio (gravar, numerar, cancelar, listar);
+- telas: lista de romaneios, editor com totais ao vivo, catálogo de produtos e
+  dados da empresa para o cabeçalho;
+- rotas de download do PDF e do Excel;
+- carga do catálogo no `seed:base`;
+- testes de integração e E2E do fluxo completo.
+
+A confirmar com a Pure.us:
+
+- DUN-14 do produto 482: a planilha trazia "c"; pela regra dos demais, é
+  `17898649053798`;
+- grafias corrigidas: "Powe Dose" para "Power Dose" (481, 486) e "Leavei-in" para
+  "Leave-in" (485);
+- três produtos se chamam só "Power Dose 13ml", um por linha — ambíguo em nota fiscal;
+- arquivo do logo (PNG) para `public/marca/logo.png`; sem ele, os documentos usam a
+  marca em texto;
+- CNPJ, IE e endereço reais da empresa (o seed usa valores provisórios);
+- o CSOSN 101 em todos os produtos indica Simples Nacional — confirmar com o contador
+  (pendência "Regime tributário" abaixo).
 
 ### Fase 2 — Consolidação (6 a 8 semanas)
 
@@ -462,6 +513,7 @@ Atualize ao fim de cada etapa.
 | 2026-09-22 | Desenho do ERP e roadmap | concluído |
 | 2026-09-22 | Fase 0 — Fundação | concluído |
 | 2026-09-22 | ADR-0005 (exceção de RLS para autenticação) | concluído |
+| 2026-09-23 | Fase 1, item 0 — Romaneio: modelo, cálculo, PDF e Excel | em andamento |
 | — | Fase 1 — Cadastros e estoque | próxima |
 
 ### Verificação executada na conclusão da fase 0

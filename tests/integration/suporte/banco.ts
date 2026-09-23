@@ -1,3 +1,7 @@
+// Carrega .env.local: o Vitest não lê arquivos de ambiente por conta própria,
+// e no CI as variáveis já vêm do runner (dotenv não sobrescreve as existentes).
+import '../../../load-env'
+
 import { execSync } from 'node:child_process'
 import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '@/generated/prisma/client'

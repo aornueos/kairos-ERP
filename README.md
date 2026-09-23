@@ -32,6 +32,8 @@ pnpm e2e             # jornadas críticas
 pnpm check:rls       # isolamento por tenant
 ```
 
+Roteiro manual, passo a passo: [docs/operacao/testar-fase-0.md](docs/operacao/testar-fase-0.md).
+
 ## Estrutura
 
 ```

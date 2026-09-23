@@ -384,6 +384,9 @@ pnpm test:int      # integração (exige banco; ver TEST_DATABASE_URL)
 pnpm e2e           # jornadas críticas
 ```
 
+Roteiro manual, com o que só olho humano confere:
+[docs/operacao/testar-fase-0.md](docs/operacao/testar-fase-0.md).
+
 `pnpm seed:demo` (massa fictícia da Pure.us) entra na fase 1.
 
 ### 8.3 Skills

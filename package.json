@@ -60,6 +60,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-hook-form": "^7.88.0",
+    "sharp": "0.35.4",
     "tailwind-merge": "^3.7.0",
     "uuidv7": "^1.2.1",
     "zod": "^4.6.5"

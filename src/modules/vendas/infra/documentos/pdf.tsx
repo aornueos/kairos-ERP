@@ -30,6 +30,7 @@ import {
   escurecer,
   linhasDaEmpresa,
   marcaEmTexto,
+  miniaturasDoDocumento,
   tituloDoDocumento,
   tituloDoGrupo,
 } from './comum'
@@ -38,8 +39,9 @@ import {
  * Romaneio em PDF, A4 paisagem.
  *
  * Mesmo conteúdo da planilha original, organizado para leitura e impressão:
- * cabeçalho com fornecedor e código de barras do número, cliente, condições,
- * uma faixa por linha de produto e o resumo do pedido com aceite.
+ * cabeçalho com fornecedor, valor total em destaque e código de barras do
+ * número; cliente; condições; uma faixa por linha de produto com miniatura de
+ * cada item; resumo com aceite.
  *
  * Romaneio com quantidades mostra só o que foi pedido. Romaneio sem quantidade
  * e tabela em branco mostram o catálogo inteiro, com a coluna de quantidade em
@@ -55,32 +57,70 @@ const COR = {
   faixa: '#EDEDED',
   alertaFundo: '#FCE4C8',
   alertaTexto: '#9C4A00',
+  manual: '#6B2FA3',
+  manualFundo: '#EFE5F8',
   perigo: '#C00000',
 }
 
-/** Larguras em pontos. A4 paisagem com margem de 24pt deixa 794pt úteis. */
-const COLUNAS: Array<{
+type Chave =
+  | 'codigo'
+  | 'ean'
+  | 'cst'
+  | 'ncm'
+  | 'dun'
+  | 'cest'
+  | 'dimensoes'
+  | 'produto'
+  | 'preco'
+  | 'precoAplicado'
+  | 'caixaBox'
+  | 'caixaMaster'
+  | 'quantidade'
+  | 'boxes'
+  | 'caixas'
+  | 'total'
+
+interface Coluna {
+  chave: Chave
   titulo: string
   largura: number
   alinhar: 'left' | 'center' | 'right'
-}> = [
-  { titulo: 'CÓD.', largura: 28, alinhar: 'left' },
-  { titulo: 'EAN', largura: 60, alinhar: 'center' },
-  { titulo: 'CST/CSOSN', largura: 44, alinhar: 'center' },
-  { titulo: 'NCM', largura: 42, alinhar: 'center' },
-  { titulo: 'DUN-14', largura: 66, alinhar: 'center' },
-  { titulo: 'CEST', largura: 36, alinhar: 'center' },
-  { titulo: 'C x L x A (cm)', largura: 54, alinhar: 'center' },
-  { titulo: '', largura: 0, alinhar: 'left' },
-  { titulo: 'Preço', largura: 44, alinhar: 'right' },
-  { titulo: 'Preço c/ desc.', largura: 50, alinhar: 'right' },
-  { titulo: 'Caixa master', largura: 36, alinhar: 'center' },
-  { titulo: 'Quant.', largura: 40, alinhar: 'center' },
-  { titulo: 'Caixas', largura: 36, alinhar: 'center' },
-  { titulo: 'Total', largura: 60, alinhar: 'right' },
+  /** Tom mais forte na faixa zebrada, como na planilha original. */
+  destacada?: boolean
+}
+
+/** Larguras em pontos. A4 paisagem com margem de 24pt deixa 794pt úteis. */
+const LARGURA_UTIL = 794
+
+const COLUNAS_FIXAS: Coluna[] = [
+  { chave: 'codigo', titulo: 'CÓD.', largura: 26, alinhar: 'left' },
+  { chave: 'ean', titulo: 'EAN', largura: 58, alinhar: 'center', destacada: true },
+  { chave: 'cst', titulo: 'CST/CSOSN', largura: 42, alinhar: 'center' },
+  { chave: 'ncm', titulo: 'NCM', largura: 40, alinhar: 'center', destacada: true },
+  { chave: 'dun', titulo: 'DUN-14', largura: 62, alinhar: 'center' },
+  { chave: 'cest', titulo: 'CEST', largura: 34, alinhar: 'center', destacada: true },
+  { chave: 'dimensoes', titulo: 'C x L x A (cm)', largura: 50, alinhar: 'center' },
+  { chave: 'produto', titulo: '', largura: 0, alinhar: 'left', destacada: true },
+  { chave: 'preco', titulo: 'Preço', largura: 40, alinhar: 'right' },
+  { chave: 'precoAplicado', titulo: 'Preço c/ desc.', largura: 48, alinhar: 'right' },
+  { chave: 'caixaBox', titulo: 'Caixa box', largura: 30, alinhar: 'center' },
+  { chave: 'caixaMaster', titulo: 'Caixa master', largura: 34, alinhar: 'center' },
+  { chave: 'quantidade', titulo: 'Quant.', largura: 36, alinhar: 'center' },
+  { chave: 'boxes', titulo: 'Box', largura: 30, alinhar: 'center' },
+  { chave: 'caixas', titulo: 'Cx master', largura: 34, alinhar: 'center' },
+  { chave: 'total', titulo: 'Total', largura: 56, alinhar: 'right' },
 ]
 
-const DESTACADAS = new Set([1, 3, 5, 7])
+const COLUNAS: Coluna[] = COLUNAS_FIXAS.map((c) =>
+  c.chave === 'produto'
+    ? {
+        ...c,
+        largura: LARGURA_UTIL - COLUNAS_FIXAS.reduce((soma, x) => soma + x.largura, 0),
+      }
+    : c,
+)
+
+const LADO_MINIATURA = 14
 
 // Nome de produto e de linha nunca quebra no meio da palavra: "Cachead-os"
 // num documento comercial parece erro de impressão.
@@ -95,7 +135,7 @@ const s = StyleSheet.create({
     fontSize: 8,
     color: COR.texto,
   },
-  cabecalho: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
+  cabecalho: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 10 },
   marca: {
     fontFamily: 'Helvetica-Bold',
     fontSize: 28,
@@ -104,8 +144,28 @@ const s = StyleSheet.create({
   },
   empresaLinha: { fontSize: 7.5, color: COR.suave, marginTop: 1.5 },
   empresaNome: { fontSize: 8.5, fontFamily: 'Helvetica-Bold', color: COR.texto },
-  documento: { alignItems: 'flex-end', width: 240 },
-  titulo: { fontFamily: 'Helvetica-Bold', fontSize: 16, letterSpacing: 0.5 },
+  destaqueTotal: {
+    width: 220,
+    marginRight: 16,
+    backgroundColor: '#D9D9D9',
+    borderTopWidth: 1.5,
+    borderBottomWidth: 1.5,
+    borderColor: COR.forte,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    alignItems: 'flex-end',
+  },
+  destaqueRotulo: { fontFamily: 'Helvetica-Bold', fontSize: 8, letterSpacing: 0.4 },
+  destaqueValor: {
+    fontFamily: 'Helvetica-Bold',
+    fontSize: 22,
+    color: COR.azul,
+    marginTop: 2,
+    minHeight: 26,
+  },
+  destaqueDetalhe: { fontSize: 7.5, color: COR.forte, marginTop: 2 },
+  documento: { alignItems: 'flex-end', width: 160 },
+  titulo: { fontFamily: 'Helvetica-Bold', fontSize: 15, letterSpacing: 0.5 },
   numero: { fontFamily: 'Helvetica-Bold', fontSize: 12, marginTop: 2 },
   meta: { fontSize: 7.5, color: COR.suave, marginTop: 3 },
   carimbo: {
@@ -157,7 +217,13 @@ const s = StyleSheet.create({
     marginBottom: 6,
   },
   grupo: { marginBottom: 6 },
-  linhaTabela: { flexDirection: 'row', alignItems: 'center', minHeight: 13 },
+  linhaTabela: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 18,
+    borderBottomWidth: 0.4,
+    borderBottomColor: COR.borda,
+  },
   celula: { paddingHorizontal: 3, paddingVertical: 2 },
   cabecalhoTabela: {
     flexDirection: 'row',
@@ -167,6 +233,13 @@ const s = StyleSheet.create({
     borderBottomColor: COR.forte,
   },
   cabecalhoTexto: { fontFamily: 'Helvetica-Bold', fontSize: 6.5 },
+  produto: { flexDirection: 'row', alignItems: 'center' },
+  miniatura: {
+    width: LADO_MINIATURA,
+    height: LADO_MINIATURA,
+    marginRight: 4,
+    borderRadius: 2,
+  },
   faixaTotais: {
     flexDirection: 'row',
     borderTopWidth: 1,
@@ -217,17 +290,15 @@ const s = StyleSheet.create({
   },
 })
 
-const LARGURA_UTIL = 794
-const LARGURA_PRODUTO = LARGURA_UTIL - COLUNAS.reduce((soma, c) => soma + c.largura, 0)
-
-const larguraDa = (i: number) => (i === 7 ? LARGURA_PRODUTO : COLUNAS[i]!.largura)
-
 export async function gerarPdf(doc: DocumentoRomaneio): Promise<Buffer> {
-  const [barras, logo] = await Promise.all([
+  const [barras, logo, miniaturas] = await Promise.all([
     doc.numero ? codigoDeBarras(doc.numero) : Promise.resolve(null),
     carregarLogo(),
+    miniaturasDoDocumento(doc),
   ])
-  return renderToBuffer(<RomaneioPdf doc={doc} barras={barras} logo={logo} />)
+  return renderToBuffer(
+    <RomaneioPdf doc={doc} barras={barras} logo={logo} miniaturas={miniaturas} />,
+  )
 }
 
 function gruposVisiveis(doc: DocumentoRomaneio): GrupoDocumento[] {
@@ -238,16 +309,22 @@ function gruposVisiveis(doc: DocumentoRomaneio): GrupoDocumento[] {
     .filter((g) => g.itens.length > 0)
 }
 
+function emBrancoDo(doc: DocumentoRomaneio): boolean {
+  return doc.tipo === 'MODELO' || doc.totais.itensComQuantidade === 0
+}
+
 function RomaneioPdf({
   doc,
   barras,
   logo,
+  miniaturas,
 }: {
   doc: DocumentoRomaneio
   barras: Buffer | null
   logo: Buffer | null
+  miniaturas: Map<string, Buffer>
 }) {
-  const emBranco = doc.tipo === 'MODELO' || doc.totais.itensComQuantidade === 0
+  const emBranco = emBrancoDo(doc)
   const grupos = gruposVisiveis(doc)
   const ultimo = grupos.at(-1)
 
@@ -269,12 +346,19 @@ function RomaneioPdf({
         </Text>
 
         {grupos.slice(0, -1).map((grupo) => (
-          <Grupo key={grupo.nome} grupo={grupo} emBranco={emBranco} />
+          <Grupo
+            key={grupo.nome}
+            grupo={grupo}
+            emBranco={emBranco}
+            miniaturas={miniaturas}
+          />
         ))}
 
         {/* O último grupo acompanha o resumo: nunca sobra página só com totais. */}
         <View wrap={false}>
-          {ultimo ? <Grupo grupo={ultimo} emBranco={emBranco} /> : null}
+          {ultimo ? (
+            <Grupo grupo={ultimo} emBranco={emBranco} miniaturas={miniaturas} />
+          ) : null}
           <Resumo doc={doc} emBranco={emBranco} />
         </View>
 
@@ -305,10 +389,19 @@ function Cabecalho({
   logo: Buffer | null
 }) {
   const [nome, ...detalhes] = linhasDaEmpresa(doc)
+  const emBranco = emBrancoDo(doc)
+  const t = doc.totais
+  const detalheTotal = [
+    `${quantidade(t.unidades)} un`,
+    Number(t.boxes) > 0 ? `${quantidade(t.boxes)} box` : null,
+    `${quantidade(t.caixas)} cx master`,
+  ]
+    .filter(Boolean)
+    .join('  ·  ')
 
   return (
     <View style={s.cabecalho}>
-      <View>
+      <View style={{ flex: 1 }}>
         {logo ? (
           // eslint-disable-next-line jsx-a11y/alt-text -- Image do react-pdf não é <img>
           <Image
@@ -326,6 +419,12 @@ function Cabecalho({
         ))}
       </View>
 
+      <View style={s.destaqueTotal}>
+        <Text style={s.destaqueRotulo}>VALOR TOTAL DO PEDIDO</Text>
+        <Text style={s.destaqueValor}>{emBranco ? '' : moeda(t.total)}</Text>
+        {emBranco ? null : <Text style={s.destaqueDetalhe}>{detalheTotal}</Text>}
+      </View>
+
       <View style={s.documento}>
         <Text style={s.titulo}>
           {doc.tipo === 'MODELO' ? 'TABELA DE PEDIDO' : 'ROMANEIO'}
@@ -335,7 +434,7 @@ function Cabecalho({
           // eslint-disable-next-line jsx-a11y/alt-text -- Image do react-pdf não é <img>
           <Image
             src={{ data: barras, format: 'png' }}
-            style={{ width: 150, height: 26, marginTop: 5 }}
+            style={{ width: 150, height: 24, marginTop: 4 }}
           />
         ) : null}
         <Text style={s.meta}>
@@ -417,20 +516,33 @@ function Condicoes({ doc }: { doc: DocumentoRomaneio }) {
   )
 }
 
-function Grupo({ grupo, emBranco }: { grupo: GrupoDocumento; emBranco: boolean }) {
+function fundoDaCelula(coluna: Coluna, cor: string, zebra: boolean): string | undefined {
+  if (!zebra) return undefined
+  return coluna.destacada ? cor : clarear(cor, 0.45)
+}
+
+function Grupo({
+  grupo,
+  emBranco,
+  miniaturas,
+}: {
+  grupo: GrupoDocumento
+  emBranco: boolean
+  miniaturas: Map<string, Buffer>
+}) {
   return (
     <View style={s.grupo} wrap={false}>
       <View style={s.cabecalhoTabela}>
-        {COLUNAS.map((coluna, i) => (
+        {COLUNAS.map((coluna) => (
           <View
-            key={i}
+            key={coluna.chave}
             style={[
               s.celula,
               {
-                width: larguraDa(i),
+                width: coluna.largura,
                 alignSelf: 'stretch',
                 justifyContent: 'center',
-                backgroundColor: DESTACADAS.has(i)
+                backgroundColor: coluna.destacada
                   ? escurecer(grupo.cor, 0.06)
                   : grupo.cor,
               },
@@ -441,12 +553,12 @@ function Grupo({ grupo, emBranco }: { grupo: GrupoDocumento; emBranco: boolean }
                 s.cabecalhoTexto,
                 {
                   textAlign: coluna.alinhar,
-                  fontSize: i === 7 ? 8.5 : 6.5,
-                  color: i === 11 ? COR.azul : COR.texto,
+                  fontSize: coluna.chave === 'produto' ? 8.5 : 6.5,
+                  color: coluna.chave === 'quantidade' ? COR.azul : COR.texto,
                 },
               ]}
             >
-              {i === 7 ? tituloDoGrupo(grupo) : coluna.titulo}
+              {coluna.chave === 'produto' ? tituloDoGrupo(grupo) : coluna.titulo}
             </Text>
           </View>
         ))}
@@ -459,6 +571,7 @@ function Grupo({ grupo, emBranco }: { grupo: GrupoDocumento; emBranco: boolean }
           cor={grupo.cor}
           zebra={indice % 2 === 1}
           emBranco={emBranco}
+          miniatura={miniaturas.get(item.codigo) ?? null}
         />
       ))}
     </View>
@@ -470,56 +583,73 @@ function Linha({
   cor,
   zebra,
   emBranco,
+  miniatura,
 }: {
   item: ItemDocumento
   cor: string
   zebra: boolean
   emBranco: boolean
+  miniatura: Buffer | null
 }) {
-  const aberta = item.quantidade > 0 && !item.caixaFechada
-  const valores = [
-    item.codigo,
-    item.ean ?? '',
-    item.cstCsosn,
-    item.ncm,
-    item.dun14 ?? '',
-    item.cest ?? '',
-    dimensoesCm(item.comprimentoCm, item.larguraCm, item.alturaCm),
-    item.nome,
-    moeda(item.preco),
-    moeda(item.precoComDesconto),
-    String(item.caixaMaster),
-    emBranco ? '' : quantidade(item.quantidade),
-    emBranco ? '' : `${quantidade(item.caixas)}${aberta ? ' *' : ''}`,
-    emBranco ? '' : moeda(item.total),
-  ]
+  const aberta = item.quantidade > 0 && !item.embalagemFechada
+  // Embalagem aberta é sinalizada na coluna que define a venda: box quando o
+  // produto tem box, caixa master quando não tem.
+  const colunaDoAlerta: Chave = item.caixaBox ? 'boxes' : 'caixas'
+
+  const texto: Record<Exclude<Chave, 'produto'>, string> = {
+    codigo: item.codigo,
+    ean: item.ean ?? '',
+    cst: item.cstCsosn,
+    ncm: item.ncm,
+    dun: item.dun14 ?? '',
+    cest: item.cest ?? '',
+    dimensoes: dimensoesCm(item.comprimentoCm, item.larguraCm, item.alturaCm),
+    preco: moeda(item.preco),
+    precoAplicado: `${moeda(item.precoAplicado)}${item.precoManualAplicado ? ' †' : ''}`,
+    caixaBox: item.caixaBox ? String(item.caixaBox) : '–',
+    caixaMaster: String(item.caixaMaster),
+    quantidade: emBranco ? '' : quantidade(item.quantidade),
+    boxes: emBranco ? '' : item.boxes == null ? '–' : quantidade(item.boxes),
+    caixas: emBranco ? '' : quantidade(item.caixas),
+    total: emBranco ? '' : moeda(item.total),
+  }
 
   return (
-    <View
-      style={[s.linhaTabela, { borderBottomWidth: 0.4, borderBottomColor: COR.borda }]}
-      wrap={false}
-    >
-      {valores.map((valor, i) => {
-        const fundo = zebra ? (DESTACADAS.has(i) ? cor : clarear(cor, 0.45)) : undefined
-        const ehQuantidade = i === 11
-        const ehCaixas = i === 12
+    <View style={s.linhaTabela} wrap={false}>
+      {COLUNAS.map((coluna) => {
+        const alerta = aberta && coluna.chave === colunaDoAlerta
+        const manual = item.precoManualAplicado && coluna.chave === 'precoAplicado'
+        const fundo = alerta
+          ? COR.alertaFundo
+          : manual
+            ? COR.manualFundo
+            : fundoDaCelula(coluna, cor, zebra)
+
         return (
           <View
-            key={i}
+            key={coluna.chave}
             style={[
               s.celula,
               {
-                width: larguraDa(i),
+                width: coluna.largura,
                 alignSelf: 'stretch',
                 justifyContent: 'center',
-                backgroundColor: ehCaixas && aberta ? COR.alertaFundo : fundo,
+                backgroundColor: fundo,
               },
             ]}
           >
-            {ehQuantidade && emBranco ? (
+            {coluna.chave === 'produto' ? (
+              <View style={s.produto}>
+                {miniatura ? (
+                  // eslint-disable-next-line jsx-a11y/alt-text -- Image do react-pdf não é <img>
+                  <Image src={{ data: miniatura, format: 'png' }} style={s.miniatura} />
+                ) : null}
+                <Text style={{ fontSize: 8, flex: 1 }}>{item.nome}</Text>
+              </View>
+            ) : coluna.chave === 'quantidade' && emBranco ? (
               <View
                 style={{
-                  height: 10,
+                  height: 11,
                   borderWidth: 0.6,
                   borderColor: COR.azul,
                   borderRadius: 1,
@@ -528,17 +658,24 @@ function Linha({
             ) : (
               <Text
                 style={{
-                  textAlign: COLUNAS[i]!.alinhar,
-                  fontSize: i === 7 ? 8 : 7.5,
-                  fontFamily: ehQuantidade || i === 13 ? 'Helvetica-Bold' : 'Helvetica',
-                  color: ehQuantidade
-                    ? COR.azul
-                    : ehCaixas && aberta
-                      ? COR.alertaTexto
-                      : COR.texto,
+                  textAlign: coluna.alinhar,
+                  fontSize: 7.5,
+                  fontFamily:
+                    coluna.chave === 'quantidade' || coluna.chave === 'total' || manual
+                      ? 'Helvetica-Bold'
+                      : 'Helvetica',
+                  color:
+                    coluna.chave === 'quantidade'
+                      ? COR.azul
+                      : alerta
+                        ? COR.alertaTexto
+                        : manual
+                          ? COR.manual
+                          : COR.texto,
                 }}
               >
-                {valor}
+                {texto[coluna.chave]}
+                {alerta ? ' *' : ''}
               </Text>
             )}
           </View>
@@ -554,6 +691,7 @@ function Resumo({ doc, emBranco }: { doc: DocumentoRomaneio; emBranco: boolean }
   const indicadores: Array<[string, string]> = [
     ['Itens pedidos', valor(String(t.itensComQuantidade))],
     ['Unidades', valor(quantidade(t.unidades))],
+    ['Boxes', valor(quantidade(t.boxes))],
     ['Caixas master', valor(quantidade(t.caixas))],
     ['Valor bruto', valor(moeda(t.bruto))],
     [
@@ -578,20 +716,25 @@ function Resumo({ doc, emBranco }: { doc: DocumentoRomaneio; emBranco: boolean }
       </View>
 
       <View style={s.fechamento}>
-        <View style={{ width: 420 }}>
-          {t.caixasFracionadas > 0 ? (
+        <View style={{ width: 440 }}>
+          {!emBranco && t.precosManuais > 0 ? (
+            <Text style={[s.legenda, { color: COR.manual }]}>
+              † Preço negociado pelo vendedor: não segue o desconto geral do pedido.
+            </Text>
+          ) : null}
+          {!emBranco && t.embalagensAbertas > 0 ? (
             <Text style={[s.legenda, { color: COR.alertaTexto }]}>
               *{' '}
-              {t.caixasFracionadas === 1
+              {t.embalagensAbertas === 1
                 ? '1 item não fecha'
-                : `${t.caixasFracionadas} itens não fecham`}{' '}
-              a caixa master.
+                : `${t.embalagensAbertas} itens não fecham`}{' '}
+              embalagem inteira (box, quando o produto tem; caixa master, quando não).
             </Text>
           ) : null}
           {emBranco ? (
             <Text style={s.legenda}>
-              Preencha a coluna Quant. com o número de unidades. A coluna Caixa master
-              indica quantas unidades vêm em cada caixa.
+              Preencha a coluna Quant. com o número de unidades. As colunas Caixa box e
+              Caixa master indicam quantas unidades vêm em cada embalagem.
             </Text>
           ) : null}
           <Text style={s.legenda}>
@@ -600,7 +743,7 @@ function Resumo({ doc, emBranco }: { doc: DocumentoRomaneio; emBranco: boolean }
         </View>
 
         <View style={s.assinaturas}>
-          <Text style={[s.assinatura, { width: 220, marginRight: 20 }]}>
+          <Text style={[s.assinatura, { width: 200, marginRight: 20 }]}>
             Aceite do cliente
           </Text>
           <Text style={[s.assinatura, { width: 90 }]}>Data</Text>

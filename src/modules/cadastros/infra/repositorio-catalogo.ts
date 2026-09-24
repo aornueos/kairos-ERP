@@ -39,6 +39,7 @@ function produtoDTO(p: Produto): ProdutoDTO {
     alturaCm: p.alturaCm?.toString() ?? null,
     preco: p.preco.toFixed(2),
     caixaMaster: p.caixaMaster,
+    caixaBox: p.caixaBox,
     ordem: p.ordem,
     ativo: p.ativo,
   }
@@ -61,6 +62,7 @@ function paraAuditoria(p: ProdutoDTO | DadosProduto) {
     alturaCm: dec(p.alturaCm),
     preco: dec(p.preco),
     caixaMaster: p.caixaMaster,
+    caixaBox: p.caixaBox,
     ordem: p.ordem,
     ativo: p.ativo,
   }
@@ -108,6 +110,7 @@ function colunasProduto(dados: DadosProduto) {
     alturaCm: dados.alturaCm,
     preco: dados.preco,
     caixaMaster: dados.caixaMaster,
+    caixaBox: dados.caixaBox,
     ordem: dados.ordem,
     ativo: dados.ativo,
   }

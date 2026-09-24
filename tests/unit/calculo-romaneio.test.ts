@@ -31,26 +31,16 @@ describe('preço com desconto', () => {
 describe('item do romaneio', () => {
   it('total é quantidade x preço já descontado', () => {
     const r = calcularItem({ preco: '6.50', quantidade: 144, caixaMaster: 144 }, 7)
-    expect(r.precoComDesconto.toFixed(2)).toBe('6.05')
+    expect(r.precoAplicado.toFixed(2)).toBe('6.05')
     expect(r.total.toFixed(2)).toBe('871.20')
     expect(r.bruto.toFixed(2)).toBe('936.00')
+    expect(r.precoManualAplicado).toBe(false)
   })
 
-  it('conta caixas e sinaliza caixa aberta', () => {
-    expect(
-      calcularItem({ preco: 1, quantidade: 288, caixaMaster: 144 }, 0),
-    ).toMatchObject({
-      caixaFechada: true,
-    })
-    const aberta = calcularItem({ preco: 1, quantidade: 216, caixaMaster: 144 }, 0)
-    expect(aberta.caixas.toString()).toBe('1.5')
-    expect(aberta.caixaFechada).toBe(false)
-  })
-
-  it('quantidade zero é caixa fechada e total zero', () => {
+  it('quantidade zero fecha embalagem e tem total zero', () => {
     const r = calcularItem({ preco: '6.50', quantidade: 0, caixaMaster: 144 }, 10)
     expect(r.total.toFixed(2)).toBe('0.00')
-    expect(r.caixaFechada).toBe(true)
+    expect(r.embalagemFechada).toBe(true)
   })
 
   it('recusa quantidade negativa ou fracionada', () => {
@@ -59,9 +49,92 @@ describe('item do romaneio', () => {
   })
 })
 
+describe('preço manual do vendedor', () => {
+  it('sobrepõe o desconto geral', () => {
+    const r = calcularItem(
+      { preco: '6.50', quantidade: 144, caixaMaster: 144, precoManual: '5.90' },
+      10,
+    )
+    // Com 10% seria 5,85; o preço manual manda.
+    expect(r.precoAplicado.toFixed(2)).toBe('5.90')
+    expect(r.precoManualAplicado).toBe(true)
+    expect(r.total.toFixed(2)).toBe('849.60')
+    expect(r.bruto.toFixed(2)).toBe('936.00')
+  })
+
+  it('vale mesmo sem desconto no romaneio', () => {
+    const r = calcularItem(
+      { preco: '6.50', quantidade: 10, caixaMaster: 144, precoManual: '6' },
+      0,
+    )
+    expect(r.precoAplicado.toFixed(2)).toBe('6.00')
+  })
+
+  it('pode ficar acima da tabela, e o desconto total fica negativo', () => {
+    const { totais } = calcularRomaneio(
+      [{ preco: '6.50', quantidade: 10, caixaMaster: 144, precoManual: '7.00' }],
+      5,
+    )
+    expect(totais.total.toFixed(2)).toBe('70.00')
+    expect(totais.desconto.toFixed(2)).toBe('-5.00')
+  })
+
+  it('recusa preço manual zero ou negativo', () => {
+    expect(() =>
+      calcularItem({ preco: 1, quantidade: 1, caixaMaster: 1, precoManual: '0' }, 0),
+    ).toThrow('maior que zero')
+    expect(() =>
+      calcularItem({ preco: 1, quantidade: 1, caixaMaster: 1, precoManual: '-1' }, 0),
+    ).toThrow()
+  })
+
+  it('preço manual nulo usa o desconto normalmente', () => {
+    const r = calcularItem(
+      { preco: '6.50', quantidade: 1, caixaMaster: 1, precoManual: null },
+      7,
+    )
+    expect(r.precoAplicado.toFixed(2)).toBe('6.05')
+    expect(r.precoManualAplicado).toBe(false)
+  })
+})
+
+describe('embalagem: box e caixa master', () => {
+  it('sem box, alerta quando não fecha a caixa master', () => {
+    const aberta = calcularItem({ preco: 1, quantidade: 216, caixaMaster: 144 }, 0)
+    expect(aberta.caixas.toString()).toBe('1.5')
+    expect(aberta.boxes).toBeNull()
+    expect(aberta.embalagemFechada).toBe(false)
+  })
+
+  it('com box, vender boxes inteiros não é embalagem aberta', () => {
+    const r = calcularItem(
+      { preco: 1, quantidade: 216, caixaMaster: 144, caixaBox: 12 },
+      0,
+    )
+    expect(r.boxes?.toString()).toBe('18')
+    expect(r.caixas.toString()).toBe('1.5')
+    expect(r.embalagemFechada).toBe(true)
+  })
+
+  it('com box, alerta quando sobra unidade solta', () => {
+    const r = calcularItem(
+      { preco: 1, quantidade: 150, caixaMaster: 144, caixaBox: 12 },
+      0,
+    )
+    expect(r.boxes?.toString()).toBe('12.5')
+    expect(r.embalagemFechada).toBe(false)
+  })
+
+  it('recusa box inválido', () => {
+    expect(() =>
+      calcularItem({ preco: 1, quantidade: 1, caixaMaster: 144, caixaBox: 0 }, 0),
+    ).toThrow('Caixa box inválida')
+  })
+})
+
 describe('totais do romaneio', () => {
   const itens = [
-    { id: 'a', preco: '6.50', quantidade: 144, caixaMaster: 144 },
+    { id: 'a', preco: '6.50', quantidade: 144, caixaMaster: 144, caixaBox: 12 },
     { id: 'b', preco: '6.50', quantidade: 72, caixaMaster: 144 },
     { id: 'c', preco: '6.50', quantidade: 0, caixaMaster: 144 },
   ]
@@ -79,7 +152,22 @@ describe('totais do romaneio', () => {
     expect(totais.itensComQuantidade).toBe(2)
     expect(totais.unidades).toBe(216)
     expect(totais.caixas.toString()).toBe('1.5')
-    expect(totais.caixasFracionadas).toBe(1)
+    expect(totais.boxes.toString()).toBe('12')
+    expect(totais.embalagensAbertas).toBe(1)
+  })
+
+  it('conta itens com preço manual', () => {
+    const { totais } = calcularRomaneio(
+      [
+        { preco: '6.50', quantidade: 144, caixaMaster: 144, precoManual: '6.00' },
+        { preco: '6.50', quantidade: 0, caixaMaster: 144, precoManual: '6.00' },
+        { preco: '6.50', quantidade: 144, caixaMaster: 144 },
+      ],
+      5,
+    )
+    expect(totais.precosManuais).toBe(1)
+    // 144 x 6,00 + 144 x 6,18
+    expect(totais.total.toFixed(2)).toBe('1753.92')
   })
 
   it('preserva os campos do item de entrada', () => {

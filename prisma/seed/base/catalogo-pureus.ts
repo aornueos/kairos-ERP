@@ -9,6 +9,9 @@
  *   - "Leavei-in" (485) grafado como "Leave-in", igual ao 480.
  *
  * Preços são os da planilha (R$ 6,50 em todos). Ajuste pela tela de produtos.
+ *
+ * Caixa box fica em branco: a planilha não informa quantas unidades vêm em cada
+ * box. Preencher com a Pure.us antes da carga em produção.
  */
 
 export interface ProdutoCatalogo {
@@ -23,6 +26,8 @@ export interface ProdutoCatalogo {
   dimensoes: [string, string, string]
   preco: string
   caixaMaster: number
+  /** Unidades por box; null enquanto não informado. */
+  caixaBox: number | null
 }
 
 export interface LinhaCatalogo {
@@ -34,7 +39,7 @@ export interface LinhaCatalogo {
 
 const SHAMPOO = { ncm: '33051000', cest: '2801100' }
 const CAPILAR = { ncm: '33059000', cest: '2801300' }
-const PADRAO = { cstCsosn: '101', preco: '6.50', caixaMaster: 144 }
+const PADRAO = { cstCsosn: '101', preco: '6.50', caixaMaster: 144, caixaBox: null }
 
 export const CATALOGO_PUREUS: LinhaCatalogo[] = [
   {

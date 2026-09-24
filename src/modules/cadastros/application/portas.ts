@@ -29,6 +29,7 @@ export interface ProdutoDTO {
   alturaCm: string | null
   preco: string
   caixaMaster: number
+  caixaBox: number | null
   ordem: number
   ativo: boolean
 }

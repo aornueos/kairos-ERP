@@ -64,6 +64,7 @@ export const produtoEntradaSchema = z
     alturaCm: z.preprocess(vazioParaNull, decimal('Altura', 2).nullable()),
     preco: decimal('Preço', 2),
     caixaMaster: inteiro('a caixa master', 1, 100_000),
+    caixaBox: z.preprocess(vazioParaNull, inteiro('o box', 1, 100_000).nullable()),
     ordem: inteiro('a ordem', 0, 9999).default(0),
     ativo: z.boolean(),
   })
@@ -76,6 +77,13 @@ export const produtoEntradaSchema = z
         code: 'custom',
         path: ['comprimentoCm'],
         message: 'Informe as três dimensões ou nenhuma',
+      })
+    }
+    if (p.caixaBox != null && p.caixaMaster % p.caixaBox !== 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['caixaBox'],
+        message: `A caixa master (${p.caixaMaster}) precisa conter um número inteiro de boxes`,
       })
     }
   })

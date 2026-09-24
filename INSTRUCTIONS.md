@@ -5,8 +5,8 @@ ou por outra pessoa sem depender de conversa anterior. Atualize-o sempre que uma
 for tomada ou uma fase for concluída.
 
 - Produto: **KAIROS** — ERP da **Pure.us**, indústria de cosméticos capilares
-- Última atualização: 2026-09-22
-- Estado: **fase 0 (fundação) concluída e verificada**; fase 1 é a próxima
+- Última atualização: 2026-09-24
+- Estado: **fase 0 concluída**; fase 1 em andamento pelo item 0 (romaneio em PDF e Excel)
 
 ---
 
@@ -349,10 +349,26 @@ Pronto e verificado:
   visualmente e, no caso do Excel, abertos e recalculados no próprio Excel;
 - catálogo real transcrito da planilha (`prisma/seed/base/catalogo-pureus.ts`).
 
+Ajustes da primeira revisão com o comercial (migration
+`20260924120000_romaneio_box_e_preco_manual`):
+
+- **preço manual do vendedor** por item (`romaneio_item.preco_manual`): sobrepõe o
+  desconto geral; no documento aparece em roxo com †, e no Excel é valor fixo que
+  não muda quando o cliente altera o desconto;
+- **valor total no topo** do PDF e do Excel, além do resumo no final (no Excel, o
+  topo aponta para o total do rodapé);
+- **caixa box** (`produto.caixa_box`), com coluna própria e contagem de boxes; o
+  alerta de embalagem aberta usa o box quando o produto tem, e a caixa master
+  quando não;
+- **miniatura do produto** ao lado do nome, lida de
+  `public/produtos/<código>.png|jpg|jpeg|webp` e reduzida a 96 px com `sharp`;
+  sem foto, um frasco na cor da linha ocupa o lugar.
+
 Falta:
 
 - repositório e casos de uso do romaneio (gravar, numerar, cancelar, listar);
-- telas: lista de romaneios, editor com totais ao vivo, catálogo de produtos e
+- telas: lista de romaneios, editor com totais ao vivo e **campo de preço manual
+  por item no painel do vendedor**, catálogo de produtos (com caixa box e foto) e
   dados da empresa para o cabeçalho;
 - rotas de download do PDF e do Excel;
 - carga do catálogo no `seed:base`;
@@ -368,6 +384,12 @@ A confirmar com a Pure.us:
 - arquivo do logo (PNG) para `public/marca/logo.png`; sem ele, os documentos usam a
   marca em texto;
 - CNPJ, IE e endereço reais da empresa (o seed usa valores provisórios);
+- **unidades por box de cada produto**: a planilha não informa; o exemplo usa 12
+  como valor ilustrativo e o catálogo fica em branco até a confirmação;
+- **fotos dos produtos**, uma por código, para `public/produtos/`;
+- preço manual precisa de alçada? Hoje qualquer perfil que cria romaneio pode
+  negociar preço; a permissão `vendas.pedido.aprovar_desconto` já existe se a
+  Pure.us quiser limitar;
 - o CSOSN 101 em todos os produtos indica Simples Nacional — confirmar com o contador
   (pendência "Regime tributário" abaixo).
 
@@ -514,6 +536,7 @@ Atualize ao fim de cada etapa.
 | 2026-09-22 | Fase 0 — Fundação | concluído |
 | 2026-09-22 | ADR-0005 (exceção de RLS para autenticação) | concluído |
 | 2026-09-23 | Fase 1, item 0 — Romaneio: modelo, cálculo, PDF e Excel | em andamento |
+| 2026-09-24 | Romaneio: preço manual, total no topo, caixa box e miniaturas | em andamento |
 | — | Fase 1 — Cadastros e estoque | próxima |
 
 ### Verificação executada na conclusão da fase 0

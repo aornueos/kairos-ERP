@@ -57,7 +57,11 @@ model RomaneioItem {
   larguraCm     Decimal? @map("largura_cm") @db.Decimal(7, 2)
   alturaCm      Decimal? @map("altura_cm") @db.Decimal(7, 2)
   preco         Decimal  @db.Decimal(12, 2)
+  /// Preço unitário negociado pelo vendedor. Quando preenchido, substitui o
+  /// preço com desconto: o desconto geral do romaneio não se aplica ao item.
+  precoManual   Decimal? @map("preco_manual") @db.Decimal(12, 2)
   caixaMaster   Int      @map("caixa_master")
+  caixaBox      Int?     @map("caixa_box")
   quantidade    Int      @default(0)
 
   romaneio Romaneio @relation(fields: [romaneioId], references: [id], onDelete: Cascade)

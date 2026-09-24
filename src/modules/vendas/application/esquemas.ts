@@ -41,6 +41,22 @@ const desconto = z.string().transform((valor, ctx) => {
 
 export const QUANTIDADE_MAXIMA = 1_000_000
 
+/**
+ * Preço negociado pelo vendedor. Maior que zero: item de graça é bonificação,
+ * que tem tratamento fiscal próprio e não passa por aqui.
+ */
+const precoManual = z.string().transform((valor, ctx) => {
+  const normalizado = parseDecimalPtBr(valor.replace('R$', ''))
+  if (!/^\d{1,9}(\.\d{1,2})?$/.test(normalizado) || Number(normalizado) <= 0) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Preço manual maior que zero, com até duas casas',
+    })
+    return z.NEVER
+  }
+  return Number(normalizado).toFixed(2)
+})
+
 export const romaneioEntradaSchema = z.object({
   clienteRazaoSocial: z
     .string()
@@ -71,15 +87,19 @@ export const romaneioEntradaSchema = z.object({
   condicoesPagamento: textoOpcional(250, 'Condições de pagamento'),
   descontoPercentual: desconto,
   observacoes: textoOpcional(1000, 'Observações'),
-  quantidades: z.record(
+  /** Por produto: quantidade em unidades e, se negociado, o preço manual. */
+  itens: z.record(
     z.uuid(),
-    z
-      .number()
-      .int('Quantidade deve ser inteira')
-      .min(0, 'Quantidade não pode ser negativa')
-      .max(QUANTIDADE_MAXIMA, 'Quantidade acima do permitido'),
+    z.object({
+      quantidade: z
+        .number()
+        .int('Quantidade deve ser inteira')
+        .min(0, 'Quantidade não pode ser negativa')
+        .max(QUANTIDADE_MAXIMA, 'Quantidade acima do permitido'),
+      precoManual: z.preprocess(vazioParaNull, precoManual.nullable()).default(null),
+    }),
   ),
 })
 
 export type DadosRomaneio = z.output<typeof romaneioEntradaSchema>
-export type CabecalhoRomaneio = Omit<DadosRomaneio, 'quantidades'>
+export type CabecalhoRomaneio = Omit<DadosRomaneio, 'itens'>

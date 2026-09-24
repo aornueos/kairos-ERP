@@ -41,7 +41,10 @@ export interface ItemEntrada {
   larguraCm: string | null
   alturaCm: string | null
   preco: string
+  /** Preço unitário negociado pelo vendedor; sobrepõe o desconto. */
+  precoManual: string | null
   caixaMaster: number
+  caixaBox: number | null
   quantidade: number
 }
 
@@ -68,11 +71,15 @@ export interface EntradaDocumento {
 }
 
 export interface ItemDocumento extends ItemEntrada {
-  precoComDesconto: string
+  /** Preço unitário cobrado: o manual, ou o de tabela com desconto. */
+  precoAplicado: string
+  precoManualAplicado: boolean
   total: string
   bruto: string
   caixas: string
-  caixaFechada: boolean
+  /** Quantidade em boxes, ou null se o produto não tem box. */
+  boxes: string | null
+  embalagemFechada: boolean
 }
 
 export interface GrupoDocumento {
@@ -100,10 +107,12 @@ export interface DocumentoRomaneio {
     itensComQuantidade: number
     unidades: number
     caixas: string
+    boxes: string
     bruto: string
     desconto: string
     total: string
-    caixasFracionadas: number
+    embalagensAbertas: number
+    precosManuais: number
   }
 }
 
@@ -124,10 +133,11 @@ export function montarDocumento(
       .filter((i) => i.indiceGrupo === indiceGrupo)
       .map(({ indiceGrupo: _g, ...i }) => ({
         ...i,
-        precoComDesconto: i.precoComDesconto.toFixed(2),
+        precoAplicado: i.precoAplicado.toFixed(2),
         total: i.total.toFixed(2),
         bruto: i.bruto.toFixed(2),
         caixas: i.caixas.toDecimalPlaces(2).toString(),
+        boxes: i.boxes == null ? null : i.boxes.toDecimalPlaces(2).toString(),
       })),
   }))
 
@@ -148,10 +158,12 @@ export function montarDocumento(
       itensComQuantidade: totais.itensComQuantidade,
       unidades: totais.unidades,
       caixas: totais.caixas.toDecimalPlaces(2).toString(),
+      boxes: totais.boxes.toDecimalPlaces(2).toString(),
       bruto: totais.bruto.toFixed(2),
       desconto: totais.desconto.toFixed(2),
       total: totais.total.toFixed(2),
-      caixasFracionadas: totais.caixasFracionadas,
+      embalagensAbertas: totais.embalagensAbertas,
+      precosManuais: totais.precosManuais,
     },
   }
 }

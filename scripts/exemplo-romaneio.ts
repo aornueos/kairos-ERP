@@ -18,6 +18,8 @@ import { dun14DoEan } from '../src/modules/cadastros/domain/gtin'
  *   pnpm exemplo:romaneio [pasta-de-saida]
  *
  * Cliente, CNPJ da empresa e vendedor são fictícios; o catálogo é o real.
+ * O box de 12 unidades é ilustrativo: a planilha original não informa o box,
+ * e o catálogo real só recebe esse valor quando a Pure.us confirmar.
  */
 
 const destino = path.resolve(process.argv[2] ?? 'exemplos')
@@ -34,8 +36,14 @@ const PEDIDO: Record<string, number> = {
   '472': 144,
   '473': 144,
   '475': 216,
-  '500': 144,
+  '500': 150,
 }
+
+/** Box ilustrativo, só para o exemplo mostrar a coluna e a contagem. */
+const BOX_ILUSTRATIVO = 12
+
+/** Preço negociado pelo vendedor em um item, para mostrar que sobrepõe o desconto. */
+const PRECO_MANUAL: Record<string, string> = { '477': '5.90' }
 
 const EMPRESA: EntradaDocumento['empresa'] = {
   razaoSocial: 'Pure.us Cosméticos Ltda',
@@ -64,7 +72,9 @@ function grupos(comQuantidade: boolean): EntradaDocumento['grupos'] {
       larguraCm: p.dimensoes[1],
       alturaCm: p.dimensoes[2],
       preco: p.preco,
+      precoManual: comQuantidade ? (PRECO_MANUAL[p.codigo] ?? null) : null,
       caixaMaster: p.caixaMaster,
+      caixaBox: p.caixaBox ?? BOX_ILUSTRATIVO,
       quantidade: comQuantidade ? (PEDIDO[p.codigo] ?? 0) : 0,
     })),
   }))

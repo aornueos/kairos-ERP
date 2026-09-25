@@ -333,7 +333,20 @@ fatura, recebe e fecha o caixa — sem planilha paralela.
 #### Romaneio: estado
 
 Em andamento. Exemplo gerável sem banco nem login: `pnpm exemplo:romaneio [pasta]`
-produz o romaneio de exemplo e a tabela em branco, em PDF e Excel.
+produz o romaneio de exemplo, o romaneio em branco e a tabela em branco do cliente,
+em PDF e Excel.
+
+**Solução provisória enquanto as telas não existem:** o comercial preenche
+`romaneio-em-branco.xlsx` à mão. Romaneio sem número libera no Excel, além dos
+campos do cliente, o número, a emissão, o vendedor e o preço c/ desc. (valor
+digitado vira preço negociado, em roxo com †). Não tem código de barras: ele só
+existe para número emitido pelo sistema.
+
+O Excel reproduz o layout do PDF (mesmas colunas, cores, blocos e resumo, em escala
+4:3, com impressão A4 que volta ao tamanho do PDF). Colunas e paleta ficam em
+`documentos/comum.ts`, compartilhadas pelos dois geradores. Diferença deliberada: o
+PDF do romaneio lista só os itens pedidos; o Excel lista o catálogo inteiro, para
+incluir item sem gerar outro arquivo.
 
 Pronto e verificado:
 
@@ -537,6 +550,7 @@ Atualize ao fim de cada etapa.
 | 2026-09-22 | ADR-0005 (exceção de RLS para autenticação) | concluído |
 | 2026-09-23 | Fase 1, item 0 — Romaneio: modelo, cálculo, PDF e Excel | em andamento |
 | 2026-09-24 | Romaneio: preço manual, total no topo, caixa box e miniaturas | em andamento |
+| 2026-09-25 | Romaneio: Excel com o layout do PDF e romaneio em branco para preencher à mão | em andamento |
 | — | Fase 1 — Cadastros e estoque | próxima |
 
 ### Verificação executada na conclusão da fase 0

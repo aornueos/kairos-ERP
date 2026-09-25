@@ -27,12 +27,16 @@ import {
   carregarLogo,
   clarear,
   codigoDeBarras,
+  COLUNAS,
+  COR,
   escurecer,
   linhasDaEmpresa,
   marcaEmTexto,
   miniaturasDoDocumento,
   tituloDoDocumento,
   tituloDoGrupo,
+  type ChaveColuna as Chave,
+  type ColunaDoRomaneio as Coluna,
 } from './comum'
 
 /**
@@ -47,78 +51,6 @@ import {
  * e tabela em branco mostram o catálogo inteiro, com a coluna de quantidade em
  * aberto para preencher à mão.
  */
-
-const COR = {
-  texto: '#262626',
-  suave: '#666666',
-  borda: '#BFBFBF',
-  forte: '#404040',
-  azul: '#1F4FD8',
-  faixa: '#EDEDED',
-  alertaFundo: '#FCE4C8',
-  alertaTexto: '#9C4A00',
-  manual: '#6B2FA3',
-  manualFundo: '#EFE5F8',
-  perigo: '#C00000',
-}
-
-type Chave =
-  | 'codigo'
-  | 'ean'
-  | 'cst'
-  | 'ncm'
-  | 'dun'
-  | 'cest'
-  | 'dimensoes'
-  | 'produto'
-  | 'preco'
-  | 'precoAplicado'
-  | 'caixaBox'
-  | 'caixaMaster'
-  | 'quantidade'
-  | 'boxes'
-  | 'caixas'
-  | 'total'
-
-interface Coluna {
-  chave: Chave
-  titulo: string
-  largura: number
-  alinhar: 'left' | 'center' | 'right'
-  /** Tom mais forte na faixa zebrada, como na planilha original. */
-  destacada?: boolean
-}
-
-/** Larguras em pontos. A4 paisagem com margem de 24pt deixa 794pt úteis. */
-const LARGURA_UTIL = 794
-
-const COLUNAS_FIXAS: Coluna[] = [
-  { chave: 'codigo', titulo: 'CÓD.', largura: 26, alinhar: 'left' },
-  { chave: 'ean', titulo: 'EAN', largura: 58, alinhar: 'center', destacada: true },
-  { chave: 'cst', titulo: 'CST/CSOSN', largura: 42, alinhar: 'center' },
-  { chave: 'ncm', titulo: 'NCM', largura: 40, alinhar: 'center', destacada: true },
-  { chave: 'dun', titulo: 'DUN-14', largura: 62, alinhar: 'center' },
-  { chave: 'cest', titulo: 'CEST', largura: 34, alinhar: 'center', destacada: true },
-  { chave: 'dimensoes', titulo: 'C x L x A (cm)', largura: 50, alinhar: 'center' },
-  { chave: 'produto', titulo: '', largura: 0, alinhar: 'left', destacada: true },
-  { chave: 'preco', titulo: 'Preço', largura: 40, alinhar: 'right' },
-  { chave: 'precoAplicado', titulo: 'Preço c/ desc.', largura: 48, alinhar: 'right' },
-  { chave: 'caixaBox', titulo: 'Caixa box', largura: 30, alinhar: 'center' },
-  { chave: 'caixaMaster', titulo: 'Caixa master', largura: 34, alinhar: 'center' },
-  { chave: 'quantidade', titulo: 'Quant.', largura: 36, alinhar: 'center' },
-  { chave: 'boxes', titulo: 'Box', largura: 30, alinhar: 'center' },
-  { chave: 'caixas', titulo: 'Cx master', largura: 34, alinhar: 'center' },
-  { chave: 'total', titulo: 'Total', largura: 56, alinhar: 'right' },
-]
-
-const COLUNAS: Coluna[] = COLUNAS_FIXAS.map((c) =>
-  c.chave === 'produto'
-    ? {
-        ...c,
-        largura: LARGURA_UTIL - COLUNAS_FIXAS.reduce((soma, x) => soma + x.largura, 0),
-      }
-    : c,
-)
 
 const LADO_MINIATURA = 14
 
@@ -147,7 +79,7 @@ const s = StyleSheet.create({
   destaqueTotal: {
     width: 220,
     marginRight: 16,
-    backgroundColor: '#D9D9D9',
+    backgroundColor: COR.totalFundo,
     borderTopWidth: 1.5,
     borderBottomWidth: 1.5,
     borderColor: COR.forte,
@@ -258,7 +190,7 @@ const s = StyleSheet.create({
   indicadorValor: { fontFamily: 'Helvetica-Bold', fontSize: 10 },
   indicadorTotal: {
     width: 200,
-    backgroundColor: '#D9D9D9',
+    backgroundColor: COR.totalFundo,
     paddingVertical: 5,
     paddingHorizontal: 8,
     alignItems: 'flex-end',

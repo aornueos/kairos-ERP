@@ -1,124 +1,155 @@
 import ExcelJS from 'exceljs'
+import sharp from 'sharp'
 import {
-  data,
+  dataHora,
   dimensoesCm,
+  FUSO,
   mascararDocumento,
   mascararTelefone,
+  percentual,
+  quantidade,
 } from '@/shared/i18n/formato'
-import type { DocumentoRomaneio } from '../../application/documento'
+import type { DocumentoRomaneio, ItemDocumento } from '../../application/documento'
+import { precoComDesconto } from '../../domain/calculo-romaneio'
 import {
   carregarLogo,
   clarear,
   codigoDeBarras,
+  COLUNAS,
+  COR,
   escurecer,
   linhasDaEmpresa,
   marcaEmTexto,
   miniaturasDoDocumento,
   tituloDoDocumento,
   tituloDoGrupo,
+  type ChaveColuna,
 } from './comum'
 
 /**
- * Romaneio em Excel: a versão melhorada da planilha que o comercial já usava.
+ * Romaneio em Excel: o mesmo documento do PDF, editável.
  *
- * Mantém a estrutura e as colunas da original e acrescenta o que ela não tinha:
- * fórmulas que recalculam quando o cliente muda a quantidade ou o desconto,
- * campos de preenchimento destacados em azul e liberados, o resto protegido
- * contra edição acidental (sem senha), validação de quantidade, caixa box e
- * caixa master com contagem e alerta de embalagem aberta, preço negociado pelo
- * vendedor, miniatura do produto, valor total no topo, dados do fornecedor e
- * impressão pronta em A4 paisagem.
+ * Layout, cores, colunas e tipografia são os do PDF, em escala (ver ESCALA).
+ * O que a planilha acrescenta: fórmulas que recalculam quando a quantidade ou
+ * o desconto mudam, campos de preenchimento liberados e o resto protegido
+ * contra edição acidental (sem senha), validação de entrada, alertas de
+ * embalagem aberta e de preço negociado que reagem à edição, e impressão em
+ * A4 paisagem com as quebras de página do PDF.
+ *
+ * Diferença deliberada: o PDF de um romaneio mostra só os itens pedidos; a
+ * planilha mostra o catálogo inteiro, para incluir item sem gerar outro arquivo.
+ *
+ * Romaneio sem número é o preenchido à mão, fora do sistema: número, emissão,
+ * vendedor e preço negociado também ficam liberados, e não há código de barras
+ * (ele identificaria um número que ainda não existe).
  *
  * Cada fórmula leva também o resultado calculado: pré-visualização de e-mail e
  * de WhatsApp não recalcula, e mostraria zero sem isso.
  */
 
-const AZUL = 'FF1F4FD8'
-const TEXTO = 'FF262626'
-const TEXTO_SUAVE = 'FF595959'
-const BORDA = 'FFBFBFBF'
-const BORDA_FORTE = 'FF404040'
-const FAIXA = 'FFEDEDED'
-const TOTAL_FUNDO = 'FFD9D9D9'
-const ALERTA_FUNDO = 'FFFCE4C8'
-const ALERTA_TEXTO = 'FF9C4A00'
-const MANUAL_TEXTO = 'FF6B2FA3'
-const MANUAL_FUNDO = 'FFEFE5F8'
+/**
+ * Cada ponto do PDF vira 4/3 de ponto na planilha: a letra de 7,5 pt do PDF
+ * vira os 10 pt de costume do Excel. Impressa ajustada à largura do A4, a
+ * planilha volta a 75% e sai do tamanho do PDF.
+ */
+const ESCALA = 4 / 3
+const PX_POR_PT = 96 / 72
+/** Largura do dígito da fonte padrão da pasta (Calibri 11): a unidade da largura de coluna. */
+const PX_POR_UNIDADE_DE_COLUNA = 7
+const EMU_POR_PX = 9525
+const EMU_POR_PT = 12700
 
-const MOEDA = '"R$" #,##0.00'
-// "Geral" mostra 12 e 0,5 sem vírgula sobrando; a fórmula já arredonda a 2 casas.
-const CONTAGEM = 'General;-General;"–"'
-const PERCENTUAL = '0.00%'
+/** Tamanho de fonte ou altura de linha a partir da medida do PDF, com meio ponto de precisão. */
+const pt = (pdf: number) => Math.round(pdf * ESCALA * 2) / 2
+const pxDaColuna = (larguraPdf: number) => Math.round(larguraPdf * ESCALA * PX_POR_PT)
+
+/** Página do PDF, em pontos: A4 paisagem e as margens do documento. */
+const PAGINA = {
+  altura: 595.28,
+  margemLateral: 24,
+  margemTopo: 20,
+  margemBase: 36,
+  rodape: 16,
+}
+/** A escala de impressão é arredondada pelo Excel; a folga evita grupo cortado no pé da página. */
+const FOLGA_DE_PAGINA = 0.97
+
+/** O Helvetica do PDF. Arial tem as mesmas medidas e existe em qualquer Excel. */
+const FONTE = 'Arial'
+
+const FORMATO = {
+  moeda: '"R$" #,##0.00',
+  moedaOuVazio: '"R$" #,##0.00;-"R$" #,##0.00;;@',
+  moedaNegociada: '"R$" #,##0.00" †"',
+  contagem: 'General;-General;;@',
+  contagemComAlerta: 'General" *";-General" *";;@',
+  inteiro: '#,##0',
+  desconto: '"– R$ "#,##0.00;"+ R$ "#,##0.00;"– R$ "0.00;@',
+  percentual: '0.00%',
+  percentualOuVazio: '0.00%;-0.00%;;@',
+  numero: '"Nº "000000',
+  emissao: '"Emitido em "dd/mm/yyyy',
+  vigencia: '"Preços vigentes em "dd/mm/yyyy',
+  vendedor: '"Vendedor: "@',
+}
+
+const letra = (indice: number) => String.fromCharCode(65 + indice)
+
+/** Coluna da planilha por chave: A a P, na ordem do PDF. */
+const C = Object.fromEntries(COLUNAS.map((c, i) => [c.chave, letra(i)])) as Record<
+  ChaveColuna,
+  string
+>
+/** Colunas auxiliares, ocultas: valor bruto e marcas de preço negociado e de embalagem aberta. */
+const AUX = {
+  bruto: letra(COLUNAS.length),
+  manual: letra(COLUNAS.length + 1),
+  aberta: letra(COLUNAS.length + 2),
+}
+const ULTIMA = C.total
+
+/** Linhas fixas do topo; a tabela começa depois delas. */
+const LINHA = {
+  cliente: 8,
+  condicoes: 14,
+  observacoes: 15,
+  faixaItens: 18,
+  tabela: 20,
+}
+const CELULA_DESCONTO = `$${C.quantidade}$${LINHA.observacoes}`
 
 const argb = (hex: string) => `FF${hex.replace('#', '').toUpperCase()}`
+const cor = (hex: string): Partial<ExcelJS.Color> => ({ argb: argb(hex) })
+const preencher = (hex: string): ExcelJS.Fill => ({
+  type: 'pattern',
+  pattern: 'solid',
+  fgColor: cor(hex),
+})
+const traco = (style: ExcelJS.BorderStyle, hex: string): Partial<ExcelJS.Border> => ({
+  style,
+  color: cor(hex),
+})
+const FINO = traco('thin', COR.borda)
+const FORTE = traco('medium', COR.forte)
+const ASSINATURA = traco('thin', COR.forte)
 
-/**
- * Colunas da tabela, na ordem da planilha original com box e contagens
- * acrescentados. Q é auxiliar (valor bruto) e fica oculta.
- */
-const C = {
-  codigo: 'A',
-  ean: 'B',
-  cst: 'C',
-  ncm: 'D',
-  dun: 'E',
-  cest: 'F',
-  dimensoes: 'G',
-  produto: 'H',
-  preco: 'I',
-  precoAplicado: 'J',
-  caixaBox: 'K',
-  caixaMaster: 'L',
-  quantidade: 'M',
-  boxes: 'N',
-  caixas: 'O',
-  total: 'P',
-  bruto: 'Q',
-} as const
-
-type Chave = keyof typeof C
-
-const COLUNAS: Array<{
-  chave: Chave
-  titulo: string
-  largura: number
-  destacada?: boolean
-}> = [
-  { chave: 'codigo', titulo: 'CÓD.', largura: 7 },
-  { chave: 'ean', titulo: 'EAN', largura: 15.5, destacada: true },
-  { chave: 'cst', titulo: 'CST/CSOSN', largura: 10.5 },
-  { chave: 'ncm', titulo: 'NCM', largura: 10.5, destacada: true },
-  { chave: 'dun', titulo: 'DUN-14', largura: 16.5 },
-  { chave: 'cest', titulo: 'CEST', largura: 9.5, destacada: true },
-  { chave: 'dimensoes', titulo: 'C x L x A (cm)', largura: 13.5 },
-  { chave: 'produto', titulo: '', largura: 42, destacada: true },
-  { chave: 'preco', titulo: 'Preço', largura: 10.5 },
-  { chave: 'precoAplicado', titulo: 'Preço c/ desc.', largura: 12.5 },
-  { chave: 'caixaBox', titulo: 'Caixa box', largura: 8.5 },
-  { chave: 'caixaMaster', titulo: 'Caixa master', largura: 9 },
-  { chave: 'quantidade', titulo: 'Quant.', largura: 10 },
-  { chave: 'boxes', titulo: 'Box', largura: 8 },
-  { chave: 'caixas', titulo: 'Cx master', largura: 9 },
-  { chave: 'total', titulo: 'Total', largura: 17 },
-  { chave: 'bruto', titulo: 'Bruto', largura: 12 },
-]
-
-const ULTIMA = C.total
-const CELULA_DESCONTO = `$${C.boxes}$12`
+function fonte(
+  tamanhoPdf: number,
+  extra: Partial<ExcelJS.Font> = {},
+): Partial<ExcelJS.Font> {
+  return { name: FONTE, size: pt(tamanhoPdf), color: cor(COR.texto), ...extra }
+}
 
 type Estilo = Partial<
   Pick<ExcelJS.Style, 'font' | 'alignment' | 'numFmt' | 'fill' | 'border'>
 >
 
-function preencher(hex: string): ExcelJS.Fill {
-  return { type: 'pattern', pattern: 'solid', fgColor: { argb: hex } }
-}
-
-function aplicar(celula: ExcelJS.Cell, estilo: Estilo) {
+function escrever(celula: ExcelJS.Cell, valor: ExcelJS.CellValue, estilo: Estilo = {}) {
+  celula.value = valor
   Object.assign(celula, estilo)
 }
 
-/** Campo que o cliente preenche: azul, destravado. */
+/** Campo de preenchimento: fica destravado na planilha protegida. */
 function liberar(celula: ExcelJS.Cell) {
   celula.protection = { locked: false }
 }
@@ -129,6 +160,91 @@ function letrasEntre(inicio: string, fim: string): string[] {
   return Array.from({ length: b - a + 1 }, (_, i) => String.fromCharCode(a + i))
 }
 
+/** Mescla as colunas na linha (quando são mais de uma) e devolve a célula principal. */
+function mesclar(
+  ws: ExcelJS.Worksheet,
+  de: string,
+  ate: string,
+  linha: number,
+  ateLinha = linha,
+) {
+  if (de !== ate || linha !== ateLinha) ws.mergeCells(`${de}${linha}:${ate}${ateLinha}`)
+  return ws.getCell(`${de}${linha}`)
+}
+
+function somarBorda(celula: ExcelJS.Cell, borda: Partial<ExcelJS.Borders>) {
+  celula.border = { ...celula.border, ...borda }
+}
+
+/** Contorno de um retângulo de células, sem apagar as bordas internas. */
+function contornar(
+  ws: ExcelJS.Worksheet,
+  de: string,
+  ate: string,
+  linhaDe: number,
+  linhaAte: number,
+  borda: Partial<ExcelJS.Border>,
+) {
+  for (const col of letrasEntre(de, ate)) {
+    somarBorda(ws.getCell(`${col}${linhaDe}`), { top: borda })
+    somarBorda(ws.getCell(`${col}${linhaAte}`), { bottom: borda })
+  }
+  for (let linha = linhaDe; linha <= linhaAte; linha++) {
+    somarBorda(ws.getCell(`${de}${linha}`), { left: borda })
+    somarBorda(ws.getCell(`${ate}${linha}`), { right: borda })
+  }
+}
+
+function alturas(ws: ExcelJS.Worksheet, valores: Record<number, number>) {
+  for (const [linha, altura] of Object.entries(valores)) {
+    ws.getRow(Number(linha)).height = altura
+  }
+}
+
+/**
+ * Âncora de imagem em pixels a partir da esquerda da planilha e em pontos a
+ * partir do topo da linha. O exceljs converte frações de coluna com uma
+ * largura estimada que desloca a imagem; a âncora nativa, em EMU, ele grava
+ * sem conversão. A tipagem do exceljs só declara a forma fracionária.
+ */
+function ancora(xPx: number, linha: number, yPt: number): { col: number; row: number } {
+  let coluna = 0
+  let resto = xPx
+  while (coluna < COLUNAS.length - 1) {
+    const largura = pxDaColuna(COLUNAS[coluna]?.largura ?? 0)
+    if (resto < largura) break
+    resto -= largura
+    coluna++
+  }
+  const nativa = {
+    nativeCol: coluna,
+    nativeColOff: Math.round(resto * EMU_POR_PX),
+    nativeRow: linha - 1,
+    nativeRowOff: Math.round(yPt * EMU_POR_PT),
+  }
+  return nativa as unknown as { col: number; row: number }
+}
+
+const inicioDaColuna = (chave: ChaveColuna) => {
+  const indice = COLUNAS.findIndex((c) => c.chave === chave)
+  return COLUNAS.slice(0, indice).reduce((soma, c) => soma + pxDaColuna(c.largura), 0)
+}
+const LARGURA_DA_PLANILHA_PX = COLUNAS.reduce(
+  (soma, c) => soma + pxDaColuna(c.largura),
+  0,
+)
+
+/** Data do calendário de São Paulo, como data do Excel (que não tem fuso). */
+function dataDoExcel(instante: Date): Date {
+  const dia = new Intl.DateTimeFormat('en-CA', {
+    timeZone: FUSO,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(instante)
+  return new Date(`${dia}T00:00:00Z`)
+}
+
 /** Texto no rodapé de impressão: & é caractere de controle e precisa dobrar. */
 const rodape = (texto: string) => texto.replace(/&/g, '&&')
 
@@ -136,8 +252,18 @@ interface Contexto {
   wb: ExcelJS.Workbook
   ws: ExcelJS.Worksheet
   doc: DocumentoRomaneio
+  /** Romaneio sem número: preenchido à mão, fora do sistema. */
+  aMao: boolean
   /** Id da imagem no arquivo, por código de produto. */
-  imagens: Map<string, number>
+  miniaturas: Map<string, number>
+}
+
+interface Tabela {
+  primeira: number
+  ultima: number
+  /** Próxima linha livre depois da tabela. */
+  fim: number
+  grupos: Array<{ inicio: number; fim: number }>
 }
 
 export async function gerarXlsx(doc: DocumentoRomaneio): Promise<Buffer> {
@@ -146,25 +272,40 @@ export async function gerarXlsx(doc: DocumentoRomaneio): Promise<Buffer> {
   wb.created = doc.geradoEm
   wb.title = tituloDoDocumento(doc)
 
+  const aMao = doc.tipo === 'ROMANEIO' && doc.numero == null
   const ws = wb.addWorksheet(
-    doc.tipo === 'MODELO' ? 'Tabela de pedido' : `Romaneio ${doc.numero}`,
-    { views: [{ showGridLines: false }], properties: { defaultRowHeight: 16 } },
+    doc.tipo === 'MODELO'
+      ? 'Tabela de pedido'
+      : doc.numero
+        ? `Romaneio ${doc.numero}`
+        : 'Romaneio',
+    { views: [{ showGridLines: false }], properties: { defaultRowHeight: pt(12) } },
   )
 
-  ws.columns = COLUNAS.map((c) => ({
-    width: c.largura,
-    hidden: c.chave === 'bruto',
-    style: { font: { name: 'Calibri', size: 10, color: { argb: TEXTO } } },
-  }))
+  ws.columns = [
+    ...COLUNAS.map((c) => ({
+      width: pxDaColuna(c.largura) / PX_POR_UNIDADE_DE_COLUNA,
+      style: { font: fonte(7.5) },
+    })),
+    ...Object.values(AUX).map(() => ({ width: 10, hidden: true })),
+  ]
 
-  const ctx: Contexto = { wb, ws, doc, imagens: await registrarMiniaturas(wb, doc) }
+  const ctx: Contexto = {
+    wb,
+    ws,
+    doc,
+    aMao,
+    miniaturas: await registrarMiniaturas(wb, doc),
+  }
 
   await cabecalho(ctx)
   blocoCliente(ctx)
   blocoCondicoes(ctx)
-  const { primeira, ultima } = tabela(ctx)
-  const linhaTotal = rodapeDoPedido(ctx, primeira, ultima)
-  totalNoTopo(ctx, linhaTotal)
+  faixaDeItens(ctx)
+  const tabela = tabelaDeItens(ctx)
+  const { total, ultimaLinha } = resumo(ctx, tabela)
+  totalNoTopo(ctx, tabela, total)
+  quebrarPaginas(ws, tabela, ultimaLinha)
 
   ws.pageSetup = {
     paperSize: 9,
@@ -173,11 +314,27 @@ export async function gerarXlsx(doc: DocumentoRomaneio): Promise<Buffer> {
     fitToWidth: 1,
     fitToHeight: 0,
     horizontalCentered: true,
-    printArea: `A1:${ULTIMA}${linhaTotal + 3}`,
-    margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.5, header: 0.2, footer: 0.25 },
+    printArea: `A1:${ULTIMA}${ultimaLinha}`,
+    margins: {
+      left: PAGINA.margemLateral / 72,
+      right: PAGINA.margemLateral / 72,
+      top: PAGINA.margemTopo / 72,
+      bottom: PAGINA.margemBase / 72,
+      header: 0,
+      footer: PAGINA.rodape / 72,
+    },
   }
+
+  const esquerda = [tituloDoDocumento(doc), doc.cliente?.razaoSocial]
+    .filter(Boolean)
+    .join('  ·  ')
+  const centro = aMao ? '' : `Gerado em ${dataHora(doc.geradoEm)}`
+  const estiloRodape = `&"${FONTE}"&9&K${argb(COR.suave).slice(2)}`
   ws.headerFooter = {
-    oddFooter: `&L&8${rodape(tituloDoDocumento(doc))}&C&8${rodape(doc.empresa.razaoSocial)}&R&8Página &P de &N`,
+    oddFooter:
+      `&L${estiloRodape}${rodape(esquerda)}` +
+      `&C${estiloRodape}${rodape(centro)}` +
+      `&R${estiloRodape}Página &P de &N`,
   }
 
   // Sem senha: evita apagar fórmula sem querer, mas não impede quem precisa ajustar.
@@ -210,193 +367,343 @@ async function registrarMiniaturas(
   return ids
 }
 
-async function cabecalho({ wb, ws, doc }: Contexto) {
-  ws.getRow(1).height = 30
-  ws.getRow(2).height = 18
-  ws.getRow(3).height = 34
+// ---------------------------------------------------------------- cabeçalho
 
-  const titulo =
-    doc.tipo === 'MODELO'
-      ? 'TABELA DE PEDIDO'
-      : `ROMANEIO Nº ${doc.numero}${doc.cancelado ? '  —  CANCELADO' : ''}`
-
-  ws.mergeCells('A1:G1')
-  const celulaTitulo = ws.getCell('A1')
-  celulaTitulo.value = titulo
-  aplicar(celulaTitulo, {
-    font: {
-      name: 'Calibri',
-      size: 18,
-      bold: true,
-      color: { argb: doc.cancelado ? 'FFC00000' : TEXTO },
-    },
-    alignment: { vertical: 'middle' },
-  })
-
-  ws.mergeCells('A2:G2')
-  ws.getCell('A2').value =
-    doc.tipo === 'MODELO'
-      ? `Preços vigentes em ${data(doc.emitidoEm)}`
-      : [
-          `Emitido em ${data(doc.emitidoEm)}`,
-          doc.vendedor ? `Vendedor: ${doc.vendedor}` : null,
-        ]
-          .filter(Boolean)
-          .join('   ·   ')
-  aplicar(ws.getCell('A2'), {
-    font: { name: 'Calibri', size: 10, color: { argb: TEXTO_SUAVE } },
-  })
-
-  if (doc.numero) {
-    const barras = await codigoDeBarras(doc.numero)
-    const id = wb.addImage({
-      buffer: barras as unknown as ExcelJS.Buffer,
-      extension: 'png',
-    })
-    ws.addImage(id, { tl: { col: 0.1, row: 2.15 }, ext: { width: 190, height: 32 } })
-  }
+/**
+ * Três blocos, como no PDF: marca e fornecedor à esquerda, valor total em
+ * destaque no centro, tipo, número, código de barras e emissão à direita.
+ */
+async function cabecalho({ wb, ws, doc, aMao }: Contexto) {
+  alturas(ws, { 1: 26, 2: 34, 3: 16, 4: 16, 5: 14, 6: 14, 7: 10 })
 
   const logo = await carregarLogo()
   if (logo) {
-    const id = wb.addImage({
-      buffer: logo as unknown as ExcelJS.Buffer,
-      extension: 'png',
-    })
-    ws.addImage(id, { tl: { col: 13, row: 0.2 }, ext: { width: 210, height: 50 } })
+    const { width = 1, height = 1 } = await sharp(logo).metadata()
+    const alto = pt(38) * PX_POR_PT
+    ws.addImage(
+      wb.addImage({ buffer: logo as unknown as ExcelJS.Buffer, extension: 'png' }),
+      {
+        tl: ancora(0, 1, 4),
+        ext: { width: (alto * width) / height, height: alto },
+        editAs: 'oneCell',
+      },
+    )
   } else {
-    ws.mergeCells(`${C.quantidade}1:${ULTIMA}2`)
-    const marca = ws.getCell(`${C.quantidade}1`)
-    marca.value = marcaEmTexto(doc)
-    aplicar(marca, {
-      font: { name: 'Arial Black', size: 28, bold: true, color: { argb: 'FF000000' } },
-      alignment: { horizontal: 'right', vertical: 'middle' },
+    escrever(mesclar(ws, 'A', C.dimensoes, 1, 2), marcaEmTexto(doc), {
+      font: fonte(28, { bold: true }),
+      alignment: { vertical: 'bottom' },
     })
   }
-}
 
-/** Valor total no topo, apontando para o total do rodapé: um número só, dois lugares. */
-function totalNoTopo({ ws, doc }: Contexto, linhaTotal: number) {
-  ws.mergeCells(`${C.caixaMaster}3:${C.boxes}3`)
-  const rotulo = ws.getCell(`${C.caixaMaster}3`)
-  rotulo.value = 'VALOR TOTAL DO PEDIDO'
-
-  ws.mergeCells(`${C.caixas}3:${ULTIMA}3`)
-  const valor = ws.getCell(`${C.caixas}3`)
-  valor.value = { formula: `${C.total}${linhaTotal}`, result: Number(doc.totais.total) }
-
-  for (const col of letrasEntre(C.caixaMaster, ULTIMA)) {
-    const celula = ws.getCell(`${col}3`)
-    celula.fill = preencher(TOTAL_FUNDO)
-    celula.border = {
-      top: { style: 'medium', color: { argb: BORDA_FORTE } },
-      bottom: { style: 'medium', color: { argb: BORDA_FORTE } },
-    }
-  }
-  aplicar(rotulo, {
-    font: { name: 'Calibri', size: 11, bold: true },
-    alignment: { horizontal: 'center', vertical: 'middle' },
+  const [nome, ...detalhes] = linhasDaEmpresa(doc)
+  escrever(ws.getCell('A3'), nome ?? '', {
+    font: fonte(8.5, { bold: true }),
+    alignment: { vertical: 'bottom' },
   })
-  aplicar(valor, {
-    numFmt: MOEDA,
-    font: { name: 'Calibri', size: 18, bold: true, color: { argb: AZUL } },
-    alignment: { horizontal: 'right', vertical: 'middle' },
-  })
-}
-
-function blocoCliente({ ws, doc }: Contexto) {
-  ws.getCell('A5').value = 'INFORMAÇÕES DO CLIENTE'
-  aplicar(ws.getCell('A5'), { font: { name: 'Calibri', size: 11, bold: true } })
-
-  ws.mergeCells(`I5:${ULTIMA}5`)
-  ws.getCell('I5').value = 'FORNECEDOR'
-  aplicar(ws.getCell('I5'), { font: { name: 'Calibri', size: 11, bold: true } })
-
-  const c = doc.cliente
-  const campos: Array<[string, string | null]> = [
-    ['R. SOCIAL:', c?.razaoSocial ?? null],
-    ['CNPJ/CPF:', c?.documento ? mascararDocumento(c.documento) : null],
-    ['TEL.:', c?.telefone ? mascararTelefone(c.telefone) : null],
-    ['EMAIL:', c?.email ?? null],
-    ['END.:', c?.endereco ?? null],
-  ]
-
-  campos.forEach(([rotulo, valor], i) => {
-    const linha = 6 + i
-    ws.getRow(linha).height = 17
-    ws.mergeCells(`A${linha}:B${linha}`)
-    ws.mergeCells(`C${linha}:G${linha}`)
-
-    const r = ws.getCell(`A${linha}`)
-    r.value = rotulo
-    aplicar(r, { font: { name: 'Calibri', size: 10, bold: true } })
-
-    const v = ws.getCell(`C${linha}`)
-    v.value = valor ?? 'PREENCHA AQUI'
-    aplicar(v, {
-      font: { name: 'Calibri', size: 10, color: { argb: AZUL }, bold: Boolean(valor) },
+  detalhes.forEach((texto, i) => {
+    escrever(ws.getCell(`A${4 + i}`), texto, {
+      font: fonte(7.5, { color: cor(COR.suave) }),
       alignment: { vertical: 'middle' },
     })
-    liberar(v)
+  })
 
-    for (const col of letrasEntre('A', 'G')) {
-      ws.getCell(`${col}${linha}`).border = {
-        bottom: { style: 'thin', color: { argb: BORDA } },
+  // Destaque do total; o valor e o detalhe entram depois, apontando para o resumo.
+  const [deTotal, ateTotal] = [C.preco, C.caixaMaster]
+  for (let linha = 1; linha <= 4; linha++) {
+    const celula = mesclar(ws, deTotal, ateTotal, linha)
+    for (const col of letrasEntre(deTotal, ateTotal)) {
+      ws.getCell(`${col}${linha}`).fill = preencher(COR.totalFundo)
+    }
+    if (linha === 1) {
+      escrever(celula, 'VALOR TOTAL DO PEDIDO', {
+        font: fonte(8, { bold: true }),
+        alignment: { horizontal: 'right', vertical: 'bottom', indent: 1 },
+      })
+    }
+  }
+  // Só as bordas de cima e de baixo, como no PDF.
+  for (const col of letrasEntre(deTotal, ateTotal)) {
+    somarBorda(ws.getCell(`${col}1`), { top: FORTE })
+    somarBorda(ws.getCell(`${col}4`), { bottom: FORTE })
+  }
+
+  // Bloco do documento, à direita da caixa do total. Mesclado porque data e
+  // número não transbordam para a célula vizinha como texto.
+  const bloco = (linha: number) => mesclar(ws, C.quantidade, ULTIMA, linha)
+  escrever(bloco(1), doc.tipo === 'MODELO' ? 'TABELA DE PEDIDO' : 'ROMANEIO', {
+    font: fonte(15, { bold: true }),
+    alignment: { horizontal: 'right', vertical: 'bottom' },
+  })
+
+  const direita = (vertical: 'top' | 'middle' = 'middle') => ({
+    horizontal: 'right' as const,
+    vertical,
+  })
+
+  let linha = 2
+  if (doc.tipo === 'ROMANEIO') {
+    const numero = bloco(2)
+    escrever(numero, doc.numero ? Number(doc.numero) : 'Nº ______', {
+      numFmt: FORMATO.numero,
+      font: fonte(12, { bold: true }),
+      alignment: direita('top'),
+    })
+    if (aMao) {
+      liberar(numero)
+      numero.dataValidation = {
+        type: 'whole',
+        operator: 'greaterThan',
+        formulae: [0],
+        showErrorMessage: true,
+        errorTitle: 'Número inválido',
+        error: 'Informe o número do romaneio, só com algarismos.',
       }
     }
+    linha = 3
+
+    if (doc.numero) {
+      const barras = await codigoDeBarras(doc.numero)
+      // 135 x 24 pt: o bloco do documento aqui é mais estreito que o do PDF.
+      const largura = 135 * ESCALA * PX_POR_PT
+      const altura = 24 * ESCALA * PX_POR_PT
+      ws.addImage(
+        wb.addImage({ buffer: barras as unknown as ExcelJS.Buffer, extension: 'png' }),
+        {
+          tl: ancora(LARGURA_DA_PLANILHA_PX - largura - 2, 2, 20),
+          ext: { width: largura, height: altura },
+          editAs: 'oneCell',
+        },
+      )
+      linha = 5
+    }
+  }
+
+  const emissao = bloco(linha)
+  escrever(emissao, aMao ? 'Emitido em __/__/____' : dataDoExcel(doc.emitidoEm), {
+    numFmt: doc.tipo === 'MODELO' ? FORMATO.vigencia : FORMATO.emissao,
+    font: fonte(7.5, { color: cor(COR.suave) }),
+    alignment: direita(linha === 2 ? 'top' : 'middle'),
+  })
+  if (aMao) {
+    liberar(emissao)
+    emissao.dataValidation = {
+      type: 'date',
+      operator: 'greaterThan',
+      formulae: [new Date(Date.UTC(2000, 0, 1))],
+      showErrorMessage: true,
+      errorTitle: 'Data inválida',
+      error: 'Informe a data de emissão no formato dd/mm/aaaa.',
+    }
+  }
+  linha++
+
+  if (doc.tipo === 'ROMANEIO' && (doc.vendedor || aMao)) {
+    const vendedor = bloco(linha)
+    escrever(vendedor, doc.vendedor ?? '______', {
+      numFmt: FORMATO.vendedor,
+      font: fonte(7.5, { color: cor(COR.suave) }),
+      alignment: direita(),
+    })
+    if (aMao) liberar(vendedor)
+  }
+
+  if (doc.cancelado) {
+    ws.getRow(7).height = pt(17)
+    const carimbo = mesclar(ws, C.caixas, ULTIMA, 7)
+    escrever(carimbo, 'CANCELADO', {
+      font: fonte(11, { bold: true, color: cor(COR.perigo) }),
+      alignment: { horizontal: 'center', vertical: 'middle' },
+    })
+    contornar(ws, C.caixas, ULTIMA, 7, 7, traco('medium', COR.perigo))
+  }
+}
+
+/** Valor total e detalhe no topo, apontando para o resumo: um número só, dois lugares. */
+function totalNoTopo({ ws, doc }: Contexto, tabela: Tabela, total: string) {
+  const t = doc.totais
+  const faixa = (col: string) => `${col}${tabela.primeira}:${col}${tabela.ultima}`
+  const unidades = `SUM(${faixa(C.quantidade)})`
+  const boxes = `ROUND(SUM(${faixa(C.boxes)}),2)`
+  const caixas = `ROUND(SUM(${faixa(C.caixas)}),2)`
+  const vazio = t.unidades === 0
+
+  escrever(
+    ws.getCell(`${C.preco}2`),
+    { formula: `IF(${unidades}=0,"",${total})`, result: vazio ? '' : Number(t.total) },
+    {
+      numFmt: FORMATO.moedaOuVazio,
+      font: fonte(22, { bold: true, color: cor(COR.azul) }),
+      alignment: {
+        horizontal: 'right',
+        vertical: 'middle',
+        indent: 1,
+        shrinkToFit: true,
+      },
+    },
+  )
+
+  // FIXED e a conversão de número em texto usam a vírgula do Excel de quem abre.
+  const detalhe = [
+    `FIXED(${unidades},0)&" un"`,
+    `IF(${boxes}>0,"  ·  "&${boxes}&" box","")`,
+    `"  ·  "&${caixas}&" cx master"`,
+  ].join('&')
+  const resultado = [
+    `${quantidade(t.unidades)} un`,
+    Number(t.boxes) > 0 ? `${quantidade(t.boxes)} box` : null,
+    `${quantidade(t.caixas)} cx master`,
+  ]
+    .filter(Boolean)
+    .join('  ·  ')
+
+  escrever(
+    ws.getCell(`${C.preco}3`),
+    { formula: `IF(${unidades}=0,"",${detalhe})`, result: vazio ? '' : resultado },
+    {
+      font: fonte(7.5, { color: cor(COR.forte) }),
+      alignment: { horizontal: 'right', vertical: 'top', indent: 1, shrinkToFit: true },
+    },
+  )
+}
+
+// ---------------------------------------------------------------- cliente e condições
+
+const ROTULO = fonte(7.5, { bold: true, color: cor(COR.suave) })
+
+function blocoCliente({ ws, doc }: Contexto) {
+  const topo = LINHA.cliente
+  alturas(ws, {
+    [topo]: 20,
+    [topo + 1]: 18,
+    [topo + 2]: 18,
+    [topo + 3]: 18,
+    [topo + 4]: 7,
+    [topo + 5]: 8,
   })
 
-  linhasDaEmpresa(doc).forEach((texto, i) => {
-    const linha = 6 + i
-    ws.mergeCells(`I${linha}:${ULTIMA}${linha}`)
-    const celula = ws.getCell(`I${linha}`)
-    celula.value = texto
-    aplicar(celula, {
-      font: {
-        name: 'Calibri',
-        size: i === 0 ? 10 : 9,
-        bold: i === 0,
-        color: { argb: i === 0 ? TEXTO : TEXTO_SUAVE },
-      },
-    })
+  escrever(ws.getCell(`A${topo}`), 'INFORMAÇÕES DO CLIENTE', {
+    font: fonte(8, { bold: true }),
+    alignment: { vertical: 'middle', indent: 1 },
   })
+
+  const c = doc.cliente
+  const campos: Array<{
+    linha: number
+    rotulo: string
+    valor: string | null
+    de: string
+    ate: string
+    direita?: boolean
+  }> = [
+    {
+      linha: topo + 1,
+      rotulo: 'R. SOCIAL',
+      valor: c?.razaoSocial ?? null,
+      de: C.cst,
+      ate: ULTIMA,
+    },
+    {
+      linha: topo + 2,
+      rotulo: 'CNPJ/CPF',
+      valor: c?.documento ? mascararDocumento(c.documento) : null,
+      de: C.cst,
+      ate: C.dimensoes,
+    },
+    {
+      linha: topo + 2,
+      rotulo: 'TEL.',
+      valor: c?.telefone ? mascararTelefone(c.telefone) : null,
+      de: C.preco,
+      ate: ULTIMA,
+      direita: true,
+    },
+    {
+      linha: topo + 3,
+      rotulo: 'EMAIL',
+      valor: c?.email ?? null,
+      de: C.cst,
+      ate: C.dimensoes,
+    },
+    {
+      linha: topo + 3,
+      rotulo: 'END.',
+      valor: c?.endereco ?? null,
+      de: C.preco,
+      ate: ULTIMA,
+      direita: true,
+    },
+  ]
+
+  for (const campo of campos) {
+    // Rótulo da metade direita fica encostado no valor, na coluna do produto.
+    const rotulo = campo.direita
+      ? ws.getCell(`${C.produto}${campo.linha}`)
+      : mesclar(ws, 'A', C.ean, campo.linha)
+    escrever(rotulo, campo.rotulo, {
+      font: ROTULO,
+      alignment: campo.direita
+        ? { horizontal: 'right', vertical: 'bottom', indent: 1 }
+        : { vertical: 'bottom', indent: 1 },
+    })
+
+    const valor = mesclar(ws, campo.de, campo.ate, campo.linha)
+    escrever(valor, campo.valor, {
+      font: fonte(8.5),
+      alignment: { vertical: 'bottom', shrinkToFit: true },
+    })
+    liberar(valor)
+    for (const col of letrasEntre(campo.de, campo.ate)) {
+      somarBorda(ws.getCell(`${col}${campo.linha}`), { bottom: FINO })
+    }
+  }
+
+  contornar(ws, 'A', ULTIMA, topo, topo + 4, FINO)
 }
 
 function blocoCondicoes({ ws, doc }: Contexto) {
-  ws.getRow(12).height = 20
-  ws.mergeCells('A12:B12')
-  ws.getCell('A12').value = 'Condições de pagamento:'
-  aplicar(ws.getCell('A12'), {
-    font: { name: 'Calibri', size: 10, bold: true },
-    alignment: { vertical: 'middle' },
-  })
+  const topo = LINHA.condicoes
+  const obs = LINHA.observacoes
+  // Observação longa quebra em mais linhas; cada linha da caixa comporta ~110 caracteres.
+  const linhasDeObs = Math.max(1, Math.ceil((doc.observacoes?.length ?? 0) / 110))
+  alturas(ws, { [topo]: 20, [obs]: 6 + linhasDeObs * 14, [obs + 1]: 7, [obs + 2]: 10 })
 
-  ws.mergeCells(`C12:${C.caixaBox}12`)
-  const condicoes = ws.getCell('C12')
-  condicoes.value = doc.condicoesPagamento ?? 'PREENCHA AQUI'
-  aplicar(condicoes, {
-    font: {
-      name: 'Calibri',
-      size: 10,
-      color: { argb: AZUL },
-      bold: Boolean(doc.condicoesPagamento),
-    },
-    alignment: { vertical: 'middle' },
-  })
-  liberar(condicoes)
+  const fimCondicoes = C.caixaBox
+  const campos: Array<[number, string, string | null]> = [
+    [topo, 'CONDIÇÕES DE PAGAMENTO', doc.condicoesPagamento],
+    [obs, 'OBSERVAÇÕES', doc.observacoes],
+  ]
+  for (const [linha, rotulo, texto] of campos) {
+    escrever(mesclar(ws, 'A', C.cst, linha), rotulo, {
+      font: ROTULO,
+      alignment: { vertical: linha === topo ? 'bottom' : 'top', indent: 1 },
+    })
+    const valor = mesclar(ws, C.ncm, fimCondicoes, linha)
+    escrever(valor, texto, {
+      font: fonte(8.5),
+      alignment:
+        linha === topo ? { vertical: 'bottom' } : { vertical: 'top', wrapText: true },
+    })
+    liberar(valor)
+  }
+  for (const col of letrasEntre(C.ncm, fimCondicoes)) {
+    somarBorda(ws.getCell(`${col}${topo}`), { bottom: FINO })
+  }
+  contornar(ws, 'A', fimCondicoes, topo, obs + 1, FINO)
 
-  ws.mergeCells(`${C.caixaMaster}12:${C.quantidade}12`)
-  ws.getCell(`${C.caixaMaster}12`).value = 'Desconto'
-  aplicar(ws.getCell(`${C.caixaMaster}12`), {
-    font: { name: 'Calibri', size: 11, bold: true },
-    alignment: { horizontal: 'right', vertical: 'middle' },
+  // Desconto em caixa própria, separada pela coluna da caixa master.
+  escrever(mesclar(ws, C.quantidade, ULTIMA, topo), 'DESCONTO', {
+    font: ROTULO,
+    alignment: { horizontal: 'center', vertical: 'bottom' },
   })
-
-  ws.mergeCells(`${C.boxes}12:${ULTIMA}12`)
-  const desconto = ws.getCell(`${C.boxes}12`)
-  desconto.value = Number(doc.descontoPercentual) / 100
-  aplicar(desconto, {
-    numFmt: PERCENTUAL,
-    font: { name: 'Calibri', size: 13, bold: true, color: { argb: AZUL } },
+  const desconto = mesclar(ws, C.quantidade, ULTIMA, obs, obs + 1)
+  const temDesconto = Number(doc.descontoPercentual) > 0
+  escrever(desconto, Number(doc.descontoPercentual) / 100, {
+    // Tabela em branco sem desconto fica em branco, como no PDF.
+    numFmt:
+      doc.tipo === 'MODELO' && !temDesconto
+        ? FORMATO.percentualOuVazio
+        : FORMATO.percentual,
+    font: fonte(16, { bold: true, color: cor(COR.azul) }),
     alignment: { horizontal: 'center', vertical: 'middle' },
   })
   desconto.dataValidation = {
@@ -409,365 +716,598 @@ function blocoCondicoes({ ws, doc }: Contexto) {
     error: 'Informe um percentual entre 0% e 99,99%.',
   }
   liberar(desconto)
-
-  for (const col of letrasEntre('A', ULTIMA)) {
-    ws.getCell(`${col}12`).border = {
-      bottom: { style: 'medium', color: { argb: BORDA_FORTE } },
-    }
-  }
-
-  ws.getRow(13).height = 30
-  ws.mergeCells('A13:B13')
-  ws.getCell('A13').value = 'Observações:'
-  aplicar(ws.getCell('A13'), {
-    font: { name: 'Calibri', size: 10, bold: true },
-    alignment: { vertical: 'top' },
-  })
-  ws.mergeCells(`C13:${ULTIMA}13`)
-  const obs = ws.getCell('C13')
-  obs.value = doc.observacoes ?? ''
-  aplicar(obs, {
-    font: { name: 'Calibri', size: 10, color: { argb: AZUL } },
-    alignment: { vertical: 'top', wrapText: true },
-  })
-  liberar(obs)
-
-  ws.getRow(15).height = 22
-  ws.mergeCells(`A15:${ULTIMA}15`)
-  const faixa = ws.getCell('A15')
-  faixa.value = doc.tipo === 'MODELO' ? 'TABELA DE PEDIDO' : 'ITENS DO PEDIDO'
-  aplicar(faixa, {
-    font: { name: 'Calibri', size: 11, bold: true },
-    alignment: { horizontal: 'center', vertical: 'middle' },
-    fill: preencher(FAIXA),
-    border: {
-      top: { style: 'medium', color: { argb: BORDA_FORTE } },
-      bottom: { style: 'medium', color: { argb: BORDA_FORTE } },
-    },
-  })
+  contornar(ws, C.quantidade, ULTIMA, topo, obs + 1, FINO)
 }
 
-function tabela({ ws, doc, imagens }: Contexto) {
-  let linha = 17
+function faixaDeItens({ ws, doc }: Contexto) {
+  const linha = LINHA.faixaItens
+  alturas(ws, { [linha]: pt(15), [linha + 1]: pt(6) })
+  const faixa = mesclar(ws, 'A', ULTIMA, linha)
+  escrever(faixa, doc.tipo === 'MODELO' ? 'TABELA DE PEDIDO' : 'ITENS DO PEDIDO', {
+    font: fonte(9, { bold: true }),
+    alignment: { horizontal: 'center', vertical: 'middle' },
+  })
+  for (const col of letrasEntre('A', ULTIMA)) {
+    const celula = ws.getCell(`${col}${linha}`)
+    celula.fill = preencher(COR.faixa)
+    celula.border = { top: FORTE, bottom: FORTE }
+  }
+}
+
+// ---------------------------------------------------------------- itens
+
+/**
+ * Títulos que o PDF quebra em duas linhas. A quebra vai explícita: a largura
+ * do texto muda entre Excel, LibreOffice e visualizadores, e a quebra junto.
+ */
+const TITULO_EM_DUAS_LINHAS: Partial<Record<ChaveColuna, string>> = {
+  precoAplicado: 'Preço c/\ndesc.',
+  caixaBox: 'Caixa\nbox',
+  caixaMaster: 'Caixa\nmaster',
+  caixas: 'Cx\nmaster',
+}
+
+const ALTURA_ITEM = pt(18)
+const LADO_MINIATURA_PX = Math.round(14 * ESCALA * PX_POR_PT)
+
+/** Preço c/ desc. diferente do de tabela com desconto: foi negociado pelo vendedor. */
+function negociadoNaPlanilha(item: ItemDocumento, descontoPercentual: string): boolean {
+  return (
+    item.precoManualAplicado &&
+    !precoComDesconto(item.preco, descontoPercentual).eq(item.precoAplicado)
+  )
+}
+
+function tabelaDeItens({ ws, doc, aMao, miniaturas }: Contexto): Tabela {
+  let linha = LINHA.tabela
   const primeira = linha
-  const visiveis = COLUNAS.filter((c) => c.chave !== 'bruto')
+  const grupos: Tabela['grupos'] = []
 
   for (const grupo of doc.grupos) {
-    const base = grupo.cor
-    const cabecalho = ws.getRow(linha)
-    cabecalho.height = 26
+    const inicio = linha
+    const titulo = tituloDoGrupo(grupo)
+    // Título comprido quebra em duas linhas na coluna do produto, como no PDF.
+    ws.getRow(linha).height = titulo.length > 32 ? pt(26) : pt(18)
 
-    for (const coluna of visiveis) {
-      const celula = ws.getCell(`${C[coluna.chave]}${linha}`)
-      celula.value = coluna.chave === 'produto' ? tituloDoGrupo(grupo) : coluna.titulo
-      aplicar(celula, {
-        font: {
-          name: 'Calibri',
-          size: coluna.chave === 'produto' ? 11 : 9,
-          bold: true,
-          color: { argb: coluna.chave === 'quantidade' ? AZUL : TEXTO },
+    for (const coluna of COLUNAS) {
+      escrever(
+        ws.getCell(`${C[coluna.chave]}${linha}`),
+        coluna.chave === 'produto'
+          ? titulo
+          : (TITULO_EM_DUAS_LINHAS[coluna.chave] ?? coluna.titulo),
+        {
+          font: fonte(coluna.chave === 'produto' ? 8.5 : 6.5, {
+            bold: true,
+            color: cor(coluna.chave === 'quantidade' ? COR.azul : COR.texto),
+          }),
+          alignment: { horizontal: coluna.alinhar, vertical: 'middle', wrapText: true },
+          fill: preencher(coluna.destacada ? escurecer(grupo.cor, 0.06) : grupo.cor),
+          border: { bottom: FORTE },
         },
-        alignment: {
-          horizontal:
-            coluna.chave === 'produto' || coluna.chave === 'codigo' ? 'left' : 'center',
-          vertical: 'middle',
-          wrapText: true,
-        },
-        fill: preencher(argb(coluna.destacada ? escurecer(base, 0.06) : base)),
-        border: { bottom: { style: 'medium', color: { argb: BORDA_FORTE } } },
-      })
+      )
     }
     linha++
 
-    const inicioGrupo = linha
     grupo.itens.forEach((item, indice) => {
-      const r = linha
-      const zebra = indice % 2 === 1
-      const ref = (chave: Chave) => `${C[chave]}${r}`
-
-      const valores: Record<Chave, ExcelJS.CellValue> = {
-        codigo: item.codigo,
-        ean: item.ean ?? '',
-        cst: item.cstCsosn,
-        ncm: item.ncm,
-        dun: item.dun14 ?? '',
-        cest: item.cest ?? '',
-        dimensoes: dimensoesCm(item.comprimentoCm, item.larguraCm, item.alturaCm),
-        produto: item.nome,
-        preco: Number(item.preco),
-        // Preço manual é valor fixo: mudar o desconto no Excel não o altera,
-        // exatamente como no sistema.
-        precoAplicado: item.precoManualAplicado
-          ? Number(item.precoAplicado)
-          : {
-              formula: `ROUND(${ref('preco')}*(1-${CELULA_DESCONTO}),2)`,
-              result: Number(item.precoAplicado),
-            },
-        caixaBox: item.caixaBox,
-        caixaMaster: item.caixaMaster,
-        quantidade: item.quantidade > 0 ? item.quantidade : null,
-        boxes: {
-          formula: `IF(${ref('caixaBox')}>0,ROUND(${ref('quantidade')}/${ref('caixaBox')},2),"")`,
-          result: item.boxes == null ? '' : Number(item.boxes),
-        },
-        caixas: {
-          formula: `IF(${ref('caixaMaster')}>0,ROUND(${ref('quantidade')}/${ref('caixaMaster')},2),0)`,
-          result: Number(item.caixas),
-        },
-        total: {
-          formula: `${ref('quantidade')}*${ref('precoAplicado')}`,
-          result: Number(item.total),
-        },
-        bruto: {
-          formula: `${ref('quantidade')}*${ref('preco')}`,
-          result: Number(item.bruto),
-        },
-      }
-
-      ws.getRow(r).height = 20
-      for (const coluna of COLUNAS) {
-        const celula = ws.getCell(ref(coluna.chave))
-        celula.value = valores[coluna.chave]
-        const fundo = zebra ? (coluna.destacada ? base : clarear(base, 0.45)) : null
-        const moeda = ['preco', 'precoAplicado', 'total', 'bruto'].includes(coluna.chave)
-        const numero = ['boxes', 'caixas'].includes(coluna.chave)
-
-        aplicar(celula, {
-          font: {
-            name: 'Calibri',
-            size: 10,
-            bold: coluna.chave === 'quantidade' || coluna.chave === 'total',
-            color: { argb: coluna.chave === 'quantidade' ? AZUL : TEXTO },
-          },
-          alignment: {
-            horizontal:
-              coluna.chave === 'produto' || coluna.chave === 'codigo'
-                ? 'left'
-                : moeda
-                  ? 'right'
-                  : 'center',
-            vertical: 'middle',
-            // Recuo abre espaço para a miniatura do produto.
-            indent: coluna.chave === 'produto' ? 3 : undefined,
-          },
-          numFmt: moeda ? MOEDA : numero ? CONTAGEM : undefined,
-          fill: fundo && coluna.chave !== 'bruto' ? preencher(argb(fundo)) : undefined,
-          border: { bottom: { style: 'hair', color: { argb: BORDA } } },
-        })
-      }
-
-      if (item.precoManualAplicado) {
-        const celula = ws.getCell(ref('precoAplicado'))
-        celula.font = {
-          name: 'Calibri',
-          size: 10,
-          bold: true,
-          color: { argb: MANUAL_TEXTO },
-        }
-        celula.fill = preencher(MANUAL_FUNDO)
-        celula.note =
-          'Preço negociado pelo vendedor: não segue o desconto geral do pedido.'
-      }
-
-      const idImagem = imagens.get(item.codigo)
-      if (idImagem != null) {
-        // Coluna H é a oitava (índice 7); a fração desloca alguns pixels da borda.
-        ws.addImage(idImagem, {
-          tl: { col: 7.012, row: r - 1 + 0.1 },
-          ext: { width: 20, height: 20 },
+      itemDaTabela(ws, doc, item, linha, grupo.cor, indice % 2 === 1, aMao)
+      const imagem = miniaturas.get(item.codigo)
+      if (imagem != null) {
+        ws.addImage(imagem, {
+          tl: ancora(
+            inicioDaColuna('produto') + 5,
+            linha,
+            (ALTURA_ITEM - LADO_MINIATURA_PX / PX_POR_PT) / 2,
+          ),
+          ext: { width: LADO_MINIATURA_PX, height: LADO_MINIATURA_PX },
           editAs: 'oneCell',
         })
       }
-
-      const quantidade = ws.getCell(ref('quantidade'))
-      liberar(quantidade)
-      quantidade.dataValidation = {
-        type: 'whole',
-        operator: 'between',
-        allowBlank: true,
-        formulae: [0, 1_000_000],
-        showErrorMessage: true,
-        errorStyle: 'stop',
-        errorTitle: 'Quantidade inválida',
-        error: 'Informe um número inteiro de unidades, sem vírgula.',
-        showInputMessage: true,
-        promptTitle: item.nome.slice(0, 32),
-        prompt: item.caixaBox
-          ? `Box com ${item.caixaBox} un. Caixa master com ${item.caixaMaster} un.`
-          : `Caixa master com ${item.caixaMaster} unidades.`,
-      }
-
       linha++
     })
 
-    if (grupo.itens.length > 0) {
-      const q = `${C.quantidade}${inicioGrupo}`
-      const box = `${C.caixaBox}${inicioGrupo}`
-      const master = `${C.caixaMaster}${inicioGrupo}`
-      const estiloAlerta: Partial<ExcelJS.Style> = {
-        fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: ALERTA_FUNDO } },
-        font: { bold: true, color: { argb: ALERTA_TEXTO } },
-      }
-      // Box, quando o produto tem; caixa master, quando não. Mesma regra do sistema.
-      ws.addConditionalFormatting({
-        ref: `${C.boxes}${inicioGrupo}:${C.boxes}${linha - 1}`,
-        rules: [
-          {
-            type: 'expression',
-            priority: 1,
-            formulae: [`AND(${q}>0,${box}>0,MOD(${q},${box})<>0)`],
-            style: estiloAlerta,
-          },
-        ],
-      })
-      ws.addConditionalFormatting({
-        ref: `${C.caixas}${inicioGrupo}:${C.caixas}${linha - 1}`,
-        rules: [
-          {
-            type: 'expression',
-            priority: 2,
-            formulae: [`AND(${q}>0,NOT(${box}>0),MOD(${q},${master})<>0)`],
-            style: estiloAlerta,
-          },
-        ],
-      })
-    }
-
-    linha++ // respiro entre linhas de produto, como na original
+    ws.getRow(linha).height = pt(6) // respiro entre linhas de produto
+    grupos.push({ inicio, fim: linha })
+    linha++
   }
 
-  return { primeira, ultima: linha - 2 }
+  const ultima = linha - 2
+  alertas(ws, primeira, ultima)
+  return { primeira, ultima, fim: linha, grupos }
 }
 
-function rodapeDoPedido({ ws, doc }: Contexto, primeira: number, ultima: number): number {
-  const t = doc.totais
-  const inicio = ultima + 2
-  const faixa = (chave: Chave) => `${C[chave]}${primeira}:${C[chave]}${ultima}`
-  const linhaBruto = inicio + 4
-  const linhaTotal = inicio + 6
+function itemDaTabela(
+  ws: ExcelJS.Worksheet,
+  doc: DocumentoRomaneio,
+  item: ItemDocumento,
+  r: number,
+  corDoGrupo: string,
+  zebra: boolean,
+  aMao: boolean,
+) {
+  const ref = (chave: ChaveColuna) => `${C[chave]}${r}`
+  const [preco, aplicado, box, master, qtd] = [
+    ref('preco'),
+    ref('precoAplicado'),
+    ref('caixaBox'),
+    ref('caixaMaster'),
+    ref('quantidade'),
+  ]
+  const comQuantidade = item.quantidade > 0
+  const negociado = negociadoNaPlanilha(item, doc.descontoPercentual)
 
-  const linhas: Array<{
-    rotulo: string
+  const valores: Record<ChaveColuna, ExcelJS.CellValue> = {
+    codigo: item.codigo,
+    ean: item.ean ?? '',
+    cst: item.cstCsosn,
+    ncm: item.ncm,
+    dun: item.dun14 ?? '',
+    cest: item.cest ?? '',
+    dimensoes: dimensoesCm(item.comprimentoCm, item.larguraCm, item.alturaCm),
+    produto: item.nome,
+    preco: Number(item.preco),
+    // Preço manual é valor fixo: mudar o desconto não o altera, como no sistema.
+    precoAplicado: item.precoManualAplicado
+      ? Number(item.precoAplicado)
+      : {
+          formula: `ROUND(${preco}*(1-${CELULA_DESCONTO}),2)`,
+          result: Number(item.precoAplicado),
+        },
+    caixaBox: item.caixaBox ?? '–',
+    caixaMaster: item.caixaMaster,
+    quantidade: comQuantidade ? item.quantidade : null,
+    boxes: {
+      formula: `IF(${qtd}>0,IF(ISNUMBER(${box}),ROUND(${qtd}/${box},2),"–"),"")`,
+      result: comQuantidade ? (item.boxes == null ? '–' : Number(item.boxes)) : '',
+    },
+    caixas: {
+      formula: `IF(${qtd}>0,ROUND(${qtd}/${master},2),"")`,
+      result: comQuantidade ? Number(item.caixas) : '',
+    },
+    total: { formula: `${qtd}*${aplicado}`, result: Number(item.total) },
+  }
+
+  ws.getRow(r).height = ALTURA_ITEM
+  for (const coluna of COLUNAS) {
+    const celula = ws.getCell(ref(coluna.chave))
+    const moeda = coluna.chave === 'preco' || coluna.chave === 'precoAplicado'
+    const destaque = coluna.chave === 'quantidade' || coluna.chave === 'total'
+    const fundo = zebra
+      ? coluna.destacada
+        ? corDoGrupo
+        : clarear(corDoGrupo, 0.45)
+      : null
+
+    escrever(celula, valores[coluna.chave], {
+      font: fonte(coluna.chave === 'produto' ? 8 : 7.5, {
+        bold: destaque,
+        color: cor(coluna.chave === 'quantidade' ? COR.azul : COR.texto),
+      }),
+      alignment: {
+        horizontal: coluna.alinhar,
+        vertical: 'middle',
+        // Recuo abre espaço para a miniatura do produto.
+        indent: coluna.chave === 'produto' ? 4 : undefined,
+      },
+      numFmt: moeda
+        ? FORMATO.moeda
+        : coluna.chave === 'total'
+          ? FORMATO.moedaOuVazio
+          : coluna.chave === 'boxes' || coluna.chave === 'caixas'
+            ? FORMATO.contagem
+            : undefined,
+      fill: fundo ? preencher(fundo) : undefined,
+      border: { bottom: FINO },
+    })
+  }
+
+  if (negociado) {
+    // Estilo gravado além da regra condicional: aparece até em visualizador sem fórmula.
+    Object.assign(ws.getCell(aplicado), {
+      font: fonte(7.5, { bold: true, color: cor(COR.manual) }),
+      fill: preencher(COR.manualFundo),
+      numFmt: FORMATO.moedaNegociada,
+    })
+  }
+
+  const auxiliares: Record<keyof typeof AUX, ExcelJS.CellFormulaValue> = {
+    bruto: { formula: `${qtd}*${preco}`, result: Number(item.bruto) },
+    manual: {
+      formula: `IF(AND(${qtd}>0,${aplicado}<>ROUND(${preco}*(1-${CELULA_DESCONTO}),2)),1,0)`,
+      result: comQuantidade && negociado ? 1 : 0,
+    },
+    // Mesma regra do sistema: box quando o produto tem, caixa master quando não.
+    aberta: {
+      formula: `IF(${qtd}>0,IF(MOD(${qtd},IF(ISNUMBER(${box}),${box},${master}))<>0,1,0),0)`,
+      result: comQuantidade && !item.embalagemFechada ? 1 : 0,
+    },
+  }
+  for (const [chave, valor] of Object.entries(auxiliares)) {
+    ws.getCell(`${AUX[chave as keyof typeof AUX]}${r}`).value = valor
+  }
+
+  const quantidadeCelula = ws.getCell(qtd)
+  liberar(quantidadeCelula)
+  quantidadeCelula.dataValidation = {
+    type: 'whole',
+    operator: 'between',
+    allowBlank: true,
+    formulae: [0, 1_000_000],
+    showErrorMessage: true,
+    errorStyle: 'stop',
+    errorTitle: 'Quantidade inválida',
+    error: 'Informe um número inteiro de unidades, sem vírgula.',
+    showInputMessage: true,
+    promptTitle: item.nome.slice(0, 32),
+    prompt: item.caixaBox
+      ? `Box com ${item.caixaBox} un. Caixa master com ${item.caixaMaster} un.`
+      : `Caixa master com ${item.caixaMaster} unidades.`,
+  }
+
+  if (aMao) {
+    const precoCelula = ws.getCell(aplicado)
+    liberar(precoCelula)
+    precoCelula.dataValidation = {
+      type: 'decimal',
+      operator: 'greaterThan',
+      formulae: [0],
+      showErrorMessage: true,
+      errorTitle: 'Preço inválido',
+      error: 'Informe o preço unitário negociado, maior que zero.',
+      showInputMessage: true,
+      promptTitle: 'Preço negociado',
+      prompt:
+        'Digite um valor para negociar este item: ele deixa de seguir o desconto geral.',
+    }
+  }
+}
+
+/**
+ * Regras que acompanham a edição: embalagem aberta em laranja com *, preço
+ * negociado em roxo com † e quantidade vazia com a caixa azul de preencher.
+ * A coluna da caixa master identifica as linhas de item (é número só nelas).
+ */
+function alertas(ws: ExcelJS.Worksheet, primeira: number, ultima: number) {
+  const r = primeira
+  const item = `ISNUMBER($${C.caixaMaster}${r})`
+  const aberta = `$${AUX.aberta}${r}=1`
+  const temBox = `ISNUMBER($${C.caixaBox}${r})`
+  const faixa = (col: string) => `${col}${primeira}:${col}${ultima}`
+  const estiloAlerta: Partial<ExcelJS.Style> = {
+    fill: { type: 'pattern', pattern: 'solid', bgColor: cor(COR.alertaFundo) },
+    font: { color: cor(COR.alertaTexto) },
+    numFmt: FORMATO.contagemComAlerta,
+  }
+  const azul = traco('thin', COR.azul)
+
+  ws.addConditionalFormatting({
+    ref: faixa(C.boxes),
+    rules: [
+      {
+        type: 'expression',
+        priority: 1,
+        formulae: [`AND(${aberta},${temBox})`],
+        style: estiloAlerta,
+      },
+    ],
+  })
+  ws.addConditionalFormatting({
+    ref: faixa(C.caixas),
+    rules: [
+      {
+        type: 'expression',
+        priority: 2,
+        formulae: [`AND(${aberta},NOT(${temBox}))`],
+        style: estiloAlerta,
+      },
+    ],
+  })
+  ws.addConditionalFormatting({
+    ref: faixa(C.precoAplicado),
+    rules: [
+      {
+        type: 'expression',
+        priority: 3,
+        formulae: [
+          `AND(${item},ISNUMBER($${C.precoAplicado}${r}),` +
+            `$${C.precoAplicado}${r}<>ROUND($${C.preco}${r}*(1-${CELULA_DESCONTO}),2))`,
+        ],
+        style: {
+          fill: { type: 'pattern', pattern: 'solid', bgColor: cor(COR.manualFundo) },
+          font: { bold: true, color: cor(COR.manual) },
+          numFmt: FORMATO.moedaNegociada,
+        },
+      },
+    ],
+  })
+  ws.addConditionalFormatting({
+    ref: faixa(C.quantidade),
+    rules: [
+      {
+        type: 'expression',
+        priority: 4,
+        formulae: [`AND(${item},ISBLANK($${C.quantidade}${r}))`],
+        style: { border: { top: azul, left: azul, bottom: azul, right: azul } },
+      },
+    ],
+  })
+}
+
+// ---------------------------------------------------------------- resumo
+
+const TEXTO = {
+  negociado: '† Preço negociado pelo vendedor: não segue o desconto geral do pedido.',
+  preencher:
+    'Preencha a coluna Quant. com o número de unidades. As colunas Caixa box e ' +
+    'Caixa master indicam quantas unidades vêm em cada embalagem.',
+  precos: 'Preços em reais, por unidade. Valores sujeitos à confirmação no faturamento.',
+}
+const aberturas = (n: number) =>
+  `* ${n === 1 ? '1 item não fecha' : `${n} itens não fecham`} ` +
+  'embalagem inteira (box, quando o produto tem; caixa master, quando não).'
+
+/** Faixa de totais, legenda e aceite, como no fim do PDF. */
+function resumo(
+  { ws, doc }: Contexto,
+  tabela: Tabela,
+): { total: string; ultimaLinha: number } {
+  const t = doc.totais
+  const vazio = t.unidades === 0
+  const faixa = (col: string) => `${col}${tabela.primeira}:${col}${tabela.ultima}`
+  const unidades = `SUM(${faixa(C.quantidade)})`
+  const seHouver = (formula: string) => `IF(${unidades}=0,"",${formula})`
+  const rotulos = tabela.fim
+  const valores = rotulos + 1
+  alturas(ws, { [rotulos]: pt(13), [valores]: pt(22), [valores + 1]: pt(6) })
+
+  const bruto = `${C.produto}${valores}`
+  const total = `${C.caixaMaster}${valores}`
+  const indicadores: Array<{
+    de: string
+    ate: string
+    rotulo: ExcelJS.CellValue
     formula: string
-    resultado: number
-    formato?: string
+    resultado: number | string
+    numFmt: string
   }> = [
     {
+      de: 'A',
+      ate: C.ean,
       rotulo: 'Itens pedidos',
-      formula: `COUNTIF(${faixa('quantidade')},">0")`,
+      formula: seHouver(`COUNTIF(${faixa(C.quantidade)},">0")`),
       resultado: t.itensComQuantidade,
-      formato: '0',
+      numFmt: '0',
     },
     {
+      de: C.cst,
+      ate: C.ncm,
       rotulo: 'Unidades',
-      formula: `SUM(${faixa('quantidade')})`,
+      formula: seHouver(unidades),
       resultado: t.unidades,
-      formato: '#,##0',
+      numFmt: FORMATO.inteiro,
     },
     {
+      de: C.dun,
+      ate: C.dun,
       rotulo: 'Boxes',
-      formula: `SUM(${faixa('boxes')})`,
+      formula: seHouver(`ROUND(SUM(${faixa(C.boxes)}),2)`),
       resultado: Number(t.boxes),
-      formato: 'General',
+      numFmt: 'General',
     },
     {
+      de: C.cest,
+      ate: C.dimensoes,
       rotulo: 'Caixas master',
-      formula: `SUM(${faixa('caixas')})`,
+      formula: seHouver(`ROUND(SUM(${faixa(C.caixas)}),2)`),
       resultado: Number(t.caixas),
-      formato: 'General',
+      numFmt: 'General',
     },
     {
+      de: C.produto,
+      ate: C.produto,
       rotulo: 'Valor bruto',
-      formula: `SUM(${faixa('bruto')})`,
+      formula: seHouver(`SUM(${faixa(AUX.bruto)})`),
       resultado: Number(t.bruto),
+      numFmt: FORMATO.moeda,
     },
     {
-      rotulo: 'Desconto',
-      formula: `${C.total}${linhaBruto}-${C.total}${linhaTotal}`,
+      de: C.preco,
+      ate: C.caixaBox,
+      rotulo: {
+        formula: `IF(${unidades}=0,"Desconto","Desconto ("&FIXED(${CELULA_DESCONTO}*100,2)&"%)")`,
+        result: vazio ? 'Desconto' : `Desconto (${percentual(doc.descontoPercentual)})`,
+      },
+      formula: seHouver(`${bruto}-${total}`),
       resultado: Number(t.desconto),
+      numFmt: FORMATO.desconto,
     },
   ]
 
-  linhas.forEach((l, i) => {
-    const r = inicio + i
-    ws.getRow(r).height = 17
-    ws.mergeCells(`${C.quantidade}${r}:${C.caixas}${r}`)
-    const rotulo = ws.getCell(`${C.quantidade}${r}`)
-    rotulo.value = l.rotulo
-    aplicar(rotulo, {
-      font: { name: 'Calibri', size: 10, color: { argb: TEXTO_SUAVE } },
-      alignment: { horizontal: 'right', vertical: 'middle' },
+  for (const ind of indicadores) {
+    escrever(mesclar(ws, ind.de, ind.ate, rotulos), ind.rotulo, {
+      font: fonte(6.5, { color: cor(COR.suave) }),
+      alignment: { vertical: 'bottom', indent: 1 },
     })
-    const valor = ws.getCell(`${C.total}${r}`)
-    valor.value = { formula: l.formula, result: l.resultado }
-    aplicar(valor, {
-      numFmt: l.formato ?? MOEDA,
-      font: { name: 'Calibri', size: 10 },
-      alignment: { horizontal: 'right', vertical: 'middle' },
-    })
-  })
-
-  ws.getRow(linhaTotal).height = 30
-  ws.mergeCells(`${C.quantidade}${linhaTotal}:${C.caixas}${linhaTotal}`)
-  const rotuloTotal = ws.getCell(`${C.quantidade}${linhaTotal}`)
-  rotuloTotal.value = 'VALOR TOTAL DO PEDIDO'
-  const valorTotal = ws.getCell(`${C.total}${linhaTotal}`)
-  valorTotal.value = { formula: `SUM(${faixa('total')})`, result: Number(t.total) }
-
-  for (const col of letrasEntre(C.quantidade, C.total)) {
-    const celula = ws.getCell(`${col}${linhaTotal}`)
-    celula.fill = preencher(TOTAL_FUNDO)
-    celula.border = {
-      top: { style: 'medium', color: { argb: BORDA_FORTE } },
-      bottom: { style: 'medium', color: { argb: BORDA_FORTE } },
+    escrever(
+      mesclar(ws, ind.de, ind.ate, valores),
+      { formula: ind.formula, result: vazio ? '' : ind.resultado },
+      {
+        numFmt: ind.numFmt,
+        font: fonte(10, { bold: true }),
+        alignment: {
+          horizontal: 'left',
+          vertical: 'middle',
+          indent: 1,
+          shrinkToFit: true,
+        },
+      },
+    )
+    for (const linha of [rotulos, valores]) {
+      somarBorda(ws.getCell(`${ind.ate}${linha}`), { right: FINO })
     }
   }
-  aplicar(rotuloTotal, {
-    font: { name: 'Calibri', size: 11, bold: true },
-    alignment: { horizontal: 'center', vertical: 'middle' },
-  })
-  aplicar(valorTotal, {
-    numFmt: MOEDA,
-    font: { name: 'Calibri', size: 14, bold: true, color: { argb: AZUL } },
-    alignment: { horizontal: 'right', vertical: 'middle' },
-  })
 
-  // Lado esquerdo: legenda e aceite.
-  const legenda = [
-    'Campos em azul são preenchidos pelo cliente; o restante é calculado.',
-    'Box ou caixa master destacados em laranja indicam quantidade que não fecha a embalagem.',
-    'Preço c/ desc. em roxo foi negociado pelo vendedor e não segue o desconto geral.',
-  ]
-  legenda.forEach((texto, i) => {
-    const r = inicio + i
-    ws.mergeCells(`A${r}:H${r}`)
-    const celula = ws.getCell(`A${r}`)
-    celula.value = texto
-    aplicar(celula, {
-      font: { name: 'Calibri', size: 9, italic: true, color: { argb: TEXTO_SUAVE } },
-    })
+  const rotuloTotal = mesclar(ws, C.caixaMaster, ULTIMA, rotulos)
+  escrever(rotuloTotal, 'VALOR TOTAL DO PEDIDO', {
+    font: fonte(7.5, { bold: true }),
+    alignment: { horizontal: 'right', vertical: 'bottom', indent: 1 },
   })
+  escrever(
+    mesclar(ws, C.caixaMaster, ULTIMA, valores),
+    { formula: seHouver(`SUM(${faixa(C.total)})`), result: vazio ? '' : Number(t.total) },
+    {
+      numFmt: FORMATO.moedaOuVazio,
+      font: fonte(16, { bold: true, color: cor(COR.azul) }),
+      alignment: {
+        horizontal: 'right',
+        vertical: 'middle',
+        indent: 1,
+        shrinkToFit: true,
+      },
+    },
+  )
+  for (const linha of [rotulos, valores]) {
+    for (const col of letrasEntre(C.caixaMaster, ULTIMA)) {
+      ws.getCell(`${col}${linha}`).fill = preencher(COR.totalFundo)
+    }
+  }
+  for (const col of letrasEntre('A', ULTIMA)) {
+    somarBorda(ws.getCell(`${col}${rotulos}`), { top: FORTE })
+    somarBorda(ws.getCell(`${col}${valores}`), { bottom: FORTE })
+  }
 
-  // Assinaturas abaixo dos totais, separadas pela coluna F vazia. A linha de
-  // cima fica alta para caber a assinatura à mão.
-  const aceite = linhaTotal + 3
-  ws.getRow(aceite - 1).height = 30
-  const assinatura = (colunas: string[], texto: string) => {
-    ws.mergeCells(`${colunas[0]}${aceite}:${colunas.at(-1)}${aceite}`)
-    const celula = ws.getCell(`${colunas[0]}${aceite}`)
-    celula.value = texto
-    aplicar(celula, {
-      font: { name: 'Calibri', size: 9, color: { argb: TEXTO_SUAVE } },
+  const primeiraLegenda = valores + 2
+  legenda(ws, doc, tabela, primeiraLegenda)
+  const ultimaLinha = primeiraLegenda + 2
+
+  // Aceite na altura da última linha da legenda, à direita, como no PDF.
+  const assinatura = (de: string, ate: string, texto: string) => {
+    escrever(mesclar(ws, de, ate, ultimaLinha), texto, {
+      font: fonte(7.5, { color: cor(COR.suave) }),
       alignment: { vertical: 'top' },
     })
-    for (const col of colunas) {
-      ws.getCell(`${col}${aceite}`).border = {
-        top: { style: 'thin', color: { argb: BORDA_FORTE } },
-      }
+    for (const col of letrasEntre(de, ate)) {
+      somarBorda(ws.getCell(`${col}${ultimaLinha}`), { top: ASSINATURA })
     }
   }
-  assinatura(letrasEntre('A', 'E'), 'Aceite do cliente')
-  assinatura(['G', 'H'], 'Data')
+  assinatura(C.preco, C.quantidade, 'Aceite do cliente')
+  assinatura(C.caixas, ULTIMA, 'Data')
 
-  return linhaTotal
+  return { total, ultimaLinha }
+}
+
+/**
+ * Legenda que acompanha a edição, na ordem do PDF e sem linha vazia no meio:
+ * preço negociado, embalagem aberta e a nota de preços; na tabela vazia, a
+ * instrução de preenchimento no lugar das duas primeiras.
+ */
+function legenda(
+  ws: ExcelJS.Worksheet,
+  doc: DocumentoRomaneio,
+  tabela: Tabela,
+  inicio: number,
+) {
+  const faixa = (col: string) => `${col}${tabela.primeira}:${col}${tabela.ultima}`
+  const u = `SUM(${faixa(C.quantidade)})`
+  const m = `SUM(${faixa(AUX.manual)})`
+  const a = `SUM(${faixa(AUX.aberta)})`
+  const texto = (valor: string) => `"${valor}"`
+  const tAberta = `IF(${a}=1,"* 1 item não fecha","* "&${a}&" itens não fecham")&" embalagem inteira (box, quando o produto tem; caixa master, quando não)."`
+
+  const formulas = [
+    `IF(${u}=0,${texto(TEXTO.preencher)},IF(${m}>0,${texto(TEXTO.negociado)},IF(${a}>0,${tAberta},${texto(TEXTO.precos)})))`,
+    `IF(${u}=0,${texto(TEXTO.precos)},IF(${m}>0,IF(${a}>0,${tAberta},${texto(TEXTO.precos)}),IF(${a}>0,${texto(TEXTO.precos)},"")))`,
+    `IF(AND(${u}>0,${m}>0,${a}>0),${texto(TEXTO.precos)},"")`,
+  ]
+
+  // Mesmas linhas calculadas aqui, para o resultado gravado junto da fórmula.
+  const negociados = doc.grupos
+    .flatMap((g) => g.itens)
+    .filter(
+      (i) => i.quantidade > 0 && negociadoNaPlanilha(i, doc.descontoPercentual),
+    ).length
+  const linhas =
+    doc.totais.unidades === 0
+      ? [TEXTO.preencher, TEXTO.precos]
+      : [
+          negociados > 0 ? TEXTO.negociado : null,
+          doc.totais.embalagensAbertas > 0
+            ? aberturas(doc.totais.embalagensAbertas)
+            : null,
+          TEXTO.precos,
+        ].filter((l): l is string => l != null)
+
+  const corDaLinha = (texto: string) =>
+    texto.startsWith('†')
+      ? COR.manual
+      : texto.startsWith('*')
+        ? COR.alertaTexto
+        : COR.suave
+
+  formulas.forEach((formula, i) => {
+    const linha = inicio + i
+    ws.getRow(linha).height = pt(10)
+    const resultado = linhas[i] ?? ''
+    // Sem mesclar: o texto transborda para as células vazias ao lado.
+    escrever(
+      ws.getCell(`A${linha}`),
+      { formula, result: resultado },
+      {
+        font: fonte(7, { color: cor(corDaLinha(resultado)) }),
+        alignment: { vertical: 'middle' },
+      },
+    )
+  })
+
+  ws.addConditionalFormatting({
+    ref: `A${inicio}:A${inicio + formulas.length - 1}`,
+    rules: [
+      {
+        type: 'expression',
+        priority: 10,
+        formulae: [`LEFT(A${inicio},1)="†"`],
+        style: { font: { color: cor(COR.manual) } },
+      },
+      {
+        type: 'expression',
+        priority: 11,
+        formulae: [`LEFT(A${inicio},1)="*"`],
+        style: { font: { color: cor(COR.alertaTexto) } },
+      },
+      {
+        type: 'expression',
+        priority: 12,
+        formulae: [`LEN(A${inicio})>0`],
+        style: { font: { color: cor(COR.suave) } },
+      },
+    ],
+  })
+}
+
+// ---------------------------------------------------------------- impressão
+
+/**
+ * Quebras de página como as do PDF: grupo de produto nunca se divide, e o
+ * último vai para a página do resumo junto com ele.
+ */
+function quebrarPaginas(ws: ExcelJS.Worksheet, tabela: Tabela, ultimaLinha: number) {
+  const util =
+    (PAGINA.altura - PAGINA.margemTopo - PAGINA.margemBase) * ESCALA * FOLGA_DE_PAGINA
+  const altura = (de: number, ate: number) => {
+    let soma = 0
+    for (let linha = de; linha <= ate; linha++) soma += ws.getRow(linha).height ?? pt(12)
+    return soma
+  }
+
+  const primeiro = tabela.grupos[0]
+  if (!primeiro) return
+  let usada = altura(1, primeiro.inicio - 1)
+  tabela.grupos.forEach((grupo, i) => {
+    const fim = i === tabela.grupos.length - 1 ? ultimaLinha : grupo.fim
+    const necessaria = altura(grupo.inicio, fim)
+    if (usada + necessaria > util) {
+      ws.getRow(grupo.inicio - 1).addPageBreak()
+      usada = 0
+    }
+    usada += necessaria
+  })
 }

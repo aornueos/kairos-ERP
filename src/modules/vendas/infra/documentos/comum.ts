@@ -7,6 +7,82 @@ import type { DocumentoRomaneio, GrupoDocumento } from '../../application/docume
 
 /** Recursos visuais que o PDF e o Excel compartilham. */
 
+/** Paleta do romaneio. O Excel usa exatamente estas cores, para parecer o PDF. */
+export const COR = {
+  texto: '#262626',
+  suave: '#666666',
+  borda: '#BFBFBF',
+  forte: '#404040',
+  azul: '#1F4FD8',
+  faixa: '#EDEDED',
+  totalFundo: '#D9D9D9',
+  alertaFundo: '#FCE4C8',
+  alertaTexto: '#9C4A00',
+  manual: '#6B2FA3',
+  manualFundo: '#EFE5F8',
+  perigo: '#C00000',
+} as const
+
+export type ChaveColuna =
+  | 'codigo'
+  | 'ean'
+  | 'cst'
+  | 'ncm'
+  | 'dun'
+  | 'cest'
+  | 'dimensoes'
+  | 'produto'
+  | 'preco'
+  | 'precoAplicado'
+  | 'caixaBox'
+  | 'caixaMaster'
+  | 'quantidade'
+  | 'boxes'
+  | 'caixas'
+  | 'total'
+
+export interface ColunaDoRomaneio {
+  chave: ChaveColuna
+  titulo: string
+  /** Largura em pontos do PDF; o Excel converte na mesma proporção. */
+  largura: number
+  alinhar: 'left' | 'center' | 'right'
+  /** Tom mais forte na faixa zebrada, como na planilha original. */
+  destacada?: boolean
+}
+
+/** Largura útil do A4 paisagem com margem de 24 pt, em pontos. */
+export const LARGURA_UTIL = 794
+
+const COLUNAS_FIXAS: ColunaDoRomaneio[] = [
+  { chave: 'codigo', titulo: 'CÓD.', largura: 26, alinhar: 'left' },
+  { chave: 'ean', titulo: 'EAN', largura: 58, alinhar: 'center', destacada: true },
+  { chave: 'cst', titulo: 'CST/CSOSN', largura: 42, alinhar: 'center' },
+  { chave: 'ncm', titulo: 'NCM', largura: 40, alinhar: 'center', destacada: true },
+  { chave: 'dun', titulo: 'DUN-14', largura: 62, alinhar: 'center' },
+  { chave: 'cest', titulo: 'CEST', largura: 34, alinhar: 'center', destacada: true },
+  { chave: 'dimensoes', titulo: 'C x L x A (cm)', largura: 50, alinhar: 'center' },
+  { chave: 'produto', titulo: '', largura: 0, alinhar: 'left', destacada: true },
+  { chave: 'preco', titulo: 'Preço', largura: 40, alinhar: 'right' },
+  { chave: 'precoAplicado', titulo: 'Preço c/ desc.', largura: 48, alinhar: 'right' },
+  { chave: 'caixaBox', titulo: 'Caixa box', largura: 30, alinhar: 'center' },
+  { chave: 'caixaMaster', titulo: 'Caixa master', largura: 34, alinhar: 'center' },
+  { chave: 'quantidade', titulo: 'Quant.', largura: 36, alinhar: 'center' },
+  { chave: 'boxes', titulo: 'Box', largura: 30, alinhar: 'center' },
+  { chave: 'caixas', titulo: 'Cx master', largura: 34, alinhar: 'center' },
+  { chave: 'total', titulo: 'Total', largura: 56, alinhar: 'right' },
+]
+
+/** Colunas da tabela de itens, na ordem da planilha original; o produto fica com o que sobra. */
+export const COLUNAS: ColunaDoRomaneio[] = COLUNAS_FIXAS.map((c) =>
+  c.chave === 'produto'
+    ? {
+        ...c,
+        largura: LARGURA_UTIL - COLUNAS_FIXAS.reduce((soma, x) => soma + x.largura, 0),
+      }
+    : c,
+)
+
 /** Mistura a cor com branco. `fator` 0 devolve a própria cor; 1, branco. */
 export function clarear(hex: string, fator: number): string {
   return misturar(hex, 255, fator)
@@ -82,7 +158,8 @@ export function linhasDaEmpresa(doc: DocumentoRomaneio): string[] {
 
 export function tituloDoDocumento(doc: DocumentoRomaneio): string {
   if (doc.tipo === 'MODELO') return 'Tabela de pedido'
-  return `Romaneio nº ${doc.numero}`
+  // Sem número: romaneio preenchido à mão, ainda fora do sistema.
+  return doc.numero ? `Romaneio nº ${doc.numero}` : 'Romaneio'
 }
 
 // ---------------------------------------------------------------- miniaturas

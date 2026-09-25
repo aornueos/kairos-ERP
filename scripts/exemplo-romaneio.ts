@@ -12,8 +12,9 @@ import { gerarXlsx } from '../src/modules/vendas/infra/documentos/xlsx'
 import { dun14DoEan } from '../src/modules/cadastros/domain/gtin'
 
 /**
- * Gera um romaneio de exemplo e a tabela em branco, sem banco e sem login,
- * para validar o layout com quem vai usar. Uso:
+ * Gera um romaneio de exemplo, o romaneio em branco (para o vendedor preencher
+ * à mão enquanto o sistema não grava romaneios) e a tabela em branco do
+ * cliente, sem banco e sem login. Uso:
  *
  *   pnpm exemplo:romaneio [pasta-de-saida]
  *
@@ -122,13 +123,37 @@ const modelo = montarDocumento(
   agora,
 )
 
+/** Sem número: número, emissão, vendedor e preço negociado ficam liberados no Excel. */
+const emBranco = montarDocumento(
+  {
+    tipo: 'ROMANEIO',
+    numero: null,
+    cancelado: false,
+    emitidoEm: agora,
+    vendedor: null,
+    empresa: EMPRESA,
+    cliente: null,
+    condicoesPagamento: null,
+    descontoPercentual: '0.00',
+    observacoes: null,
+    grupos: grupos(false),
+  },
+  agora,
+)
+
 await mkdir(destino, { recursive: true })
 
-for (const doc of [romaneio, modelo]) {
+const documentos = [
+  { doc: romaneio, nome: (ext: 'pdf' | 'xlsx') => nomeDoArquivo(romaneio, ext) },
+  { doc: emBranco, nome: (ext: 'pdf' | 'xlsx') => `romaneio-em-branco.${ext}` },
+  { doc: modelo, nome: (ext: 'pdf' | 'xlsx') => nomeDoArquivo(modelo, ext) },
+]
+
+for (const { doc, nome } of documentos) {
   const [pdf, xlsx] = await Promise.all([gerarPdf(doc), gerarXlsx(doc)])
-  await writeFile(path.join(destino, nomeDoArquivo(doc, 'pdf')), pdf)
-  await writeFile(path.join(destino, nomeDoArquivo(doc, 'xlsx')), xlsx)
-  console.log(`${nomeDoArquivo(doc, 'pdf')}  ${nomeDoArquivo(doc, 'xlsx')}`)
+  await writeFile(path.join(destino, nome('pdf')), pdf)
+  await writeFile(path.join(destino, nome('xlsx')), xlsx)
+  console.log(`${nome('pdf')}  ${nome('xlsx')}`)
 }
 
 console.log(`Total do romaneio de exemplo: R$ ${romaneio.totais.total}`)

@@ -39,9 +39,9 @@ import {
  * Diferença deliberada: o PDF de um romaneio mostra só os itens pedidos; a
  * planilha mostra o catálogo inteiro, para incluir item sem gerar outro arquivo.
  *
- * Romaneio sem número é o preenchido à mão, fora do sistema: número, emissão,
- * vendedor e preço negociado também ficam liberados, e não há código de barras
- * (ele identificaria um número que ainda não existe).
+ * Romaneio sem número é o preenchido à mão, fora do sistema: as linhas de
+ * produto saem vazias e liberadas, assim como número, emissão e vendedor, e
+ * não há código de barras (ele identificaria um número que ainda não existe).
  *
  * Cada fórmula leva também o resultado calculado: pré-visualização de e-mail e
  * de WhatsApp não recalcula, e mostraria zero sem isso.
@@ -100,11 +100,12 @@ const C = Object.fromEntries(COLUNAS.map((c, i) => [c.chave, letra(i)])) as Reco
   ChaveColuna,
   string
 >
-/** Colunas auxiliares, ocultas: valor bruto e marcas de preço negociado e de embalagem aberta. */
+/** Colunas auxiliares, ocultas: marca de linha de item, valor bruto, preço negociado e embalagem aberta. */
 const AUX = {
-  bruto: letra(COLUNAS.length),
-  manual: letra(COLUNAS.length + 1),
-  aberta: letra(COLUNAS.length + 2),
+  item: letra(COLUNAS.length),
+  bruto: letra(COLUNAS.length + 1),
+  manual: letra(COLUNAS.length + 2),
+  aberta: letra(COLUNAS.length + 3),
 }
 const ULTIMA = C.total
 
@@ -290,13 +291,9 @@ export async function gerarXlsx(doc: DocumentoRomaneio): Promise<Buffer> {
     ...Object.values(AUX).map(() => ({ width: 10, hidden: true })),
   ]
 
-  const ctx: Contexto = {
-    wb,
-    ws,
-    doc,
-    aMao,
-    miniaturas: await registrarMiniaturas(wb, doc),
-  }
+  // Romaneio à mão não tem produto na linha, logo não tem miniatura.
+  const miniaturas = aMao ? new Map<string, number>() : await registrarMiniaturas(wb, doc)
+  const ctx: Contexto = { wb, ws, doc, aMao, miniaturas }
 
   await cabecalho(ctx)
   blocoCliente(ctx)
@@ -786,6 +783,8 @@ function tabelaDeItens({ ws, doc, aMao, miniaturas }: Contexto): Tabela {
         },
       )
     }
+    // À mão, o vendedor pode renomear a faixa conforme o que for pedido.
+    if (aMao) liberar(ws.getCell(`${C.produto}${linha}`))
     linha++
 
     grupo.itens.forEach((item, indice) => {
@@ -815,6 +814,23 @@ function tabelaDeItens({ ws, doc, aMao, miniaturas }: Contexto): Tabela {
   return { primeira, ultima, fim: linha, grupos }
 }
 
+/** Colunas de identificação: texto, para o Excel não converter EAN em notação científica. */
+const COLUNAS_DE_TEXTO: ChaveColuna[] = [
+  'codigo',
+  'ean',
+  'cst',
+  'ncm',
+  'dun',
+  'cest',
+  'dimensoes',
+  'produto',
+]
+
+/**
+ * Linha de item. No romaneio à mão ela sai vazia e liberada, para o vendedor
+ * digitar só o que foi pedido; as fórmulas usam N() e ISNUMBER() para ficar em
+ * branco, sem #VALOR!, enquanto a linha não é preenchida.
+ */
 function itemDaTabela(
   ws: ExcelJS.Worksheet,
   doc: DocumentoRomaneio,
@@ -832,39 +848,61 @@ function itemDaTabela(
     ref('caixaMaster'),
     ref('quantidade'),
   ]
-  const comQuantidade = item.quantidade > 0
-  const negociado = negociadoNaPlanilha(item, doc.descontoPercentual)
+  const comQuantidade = !aMao && item.quantidade > 0
+  const negociado = !aMao && negociadoNaPlanilha(item, doc.descontoPercentual)
+  const descontado = `ROUND(${preco}*(1-${CELULA_DESCONTO}),2)`
 
-  const valores: Record<ChaveColuna, ExcelJS.CellValue> = {
-    codigo: item.codigo,
-    ean: item.ean ?? '',
-    cst: item.cstCsosn,
-    ncm: item.ncm,
-    dun: item.dun14 ?? '',
-    cest: item.cest ?? '',
-    dimensoes: dimensoesCm(item.comprimentoCm, item.larguraCm, item.alturaCm),
-    produto: item.nome,
-    preco: Number(item.preco),
-    // Preço manual é valor fixo: mudar o desconto não o altera, como no sistema.
-    precoAplicado: item.precoManualAplicado
-      ? Number(item.precoAplicado)
-      : {
-          formula: `ROUND(${preco}*(1-${CELULA_DESCONTO}),2)`,
-          result: Number(item.precoAplicado),
-        },
-    caixaBox: item.caixaBox ?? '–',
-    caixaMaster: item.caixaMaster,
-    quantidade: comQuantidade ? item.quantidade : null,
+  const formulas = {
+    precoAplicado: {
+      formula: `IF(ISNUMBER(${preco}),${descontado},"")`,
+      result: aMao ? '' : Number(item.precoAplicado),
+    },
     boxes: {
-      formula: `IF(${qtd}>0,IF(ISNUMBER(${box}),ROUND(${qtd}/${box},2),"–"),"")`,
+      formula: `IF(N(${qtd})>0,IF(N(${box})>0,ROUND(${qtd}/${box},2),"–"),"")`,
       result: comQuantidade ? (item.boxes == null ? '–' : Number(item.boxes)) : '',
     },
     caixas: {
-      formula: `IF(${qtd}>0,ROUND(${qtd}/${master},2),"")`,
+      formula: `IF(AND(N(${qtd})>0,N(${master})>0),ROUND(${qtd}/${master},2),"")`,
       result: comQuantidade ? Number(item.caixas) : '',
     },
-    total: { formula: `${qtd}*${aplicado}`, result: Number(item.total) },
-  }
+    total: { formula: `N(${qtd})*N(${aplicado})`, result: aMao ? 0 : Number(item.total) },
+  } satisfies Partial<Record<ChaveColuna, ExcelJS.CellFormulaValue>>
+
+  const valores: Record<ChaveColuna, ExcelJS.CellValue> = aMao
+    ? {
+        codigo: null,
+        ean: null,
+        cst: null,
+        ncm: null,
+        dun: null,
+        cest: null,
+        dimensoes: null,
+        produto: null,
+        preco: null,
+        caixaBox: null,
+        caixaMaster: null,
+        quantidade: null,
+        ...formulas,
+      }
+    : {
+        codigo: item.codigo,
+        ean: item.ean ?? '',
+        cst: item.cstCsosn,
+        ncm: item.ncm,
+        dun: item.dun14 ?? '',
+        cest: item.cest ?? '',
+        dimensoes: dimensoesCm(item.comprimentoCm, item.larguraCm, item.alturaCm),
+        produto: item.nome,
+        preco: Number(item.preco),
+        caixaBox: item.caixaBox ?? '–',
+        caixaMaster: item.caixaMaster,
+        quantidade: comQuantidade ? item.quantidade : null,
+        ...formulas,
+        // Preço manual é valor fixo: mudar o desconto não o altera, como no sistema.
+        precoAplicado: item.precoManualAplicado
+          ? Number(item.precoAplicado)
+          : formulas.precoAplicado,
+      }
 
   ws.getRow(r).height = ALTURA_ITEM
   for (const coluna of COLUNAS) {
@@ -885,8 +923,8 @@ function itemDaTabela(
       alignment: {
         horizontal: coluna.alinhar,
         vertical: 'middle',
-        // Recuo abre espaço para a miniatura do produto.
-        indent: coluna.chave === 'produto' ? 4 : undefined,
+        // Recuo abre espaço para a miniatura, que só existe com produto.
+        indent: coluna.chave === 'produto' && !aMao ? 4 : undefined,
       },
       numFmt: moeda
         ? FORMATO.moeda
@@ -894,7 +932,9 @@ function itemDaTabela(
           ? FORMATO.moedaOuVazio
           : coluna.chave === 'boxes' || coluna.chave === 'caixas'
             ? FORMATO.contagem
-            : undefined,
+            : COLUNAS_DE_TEXTO.includes(coluna.chave)
+              ? '@'
+              : undefined,
       fill: fundo ? preencher(fundo) : undefined,
       border: { bottom: FINO },
     })
@@ -909,15 +949,21 @@ function itemDaTabela(
     })
   }
 
-  const auxiliares: Record<keyof typeof AUX, ExcelJS.CellFormulaValue> = {
-    bruto: { formula: `${qtd}*${preco}`, result: Number(item.bruto) },
+  const auxiliares: Record<keyof typeof AUX, ExcelJS.CellValue> = {
+    // Marca fixa de linha de item: as regras condicionais só valem nela.
+    item: 1,
+    bruto: { formula: `N(${qtd})*N(${preco})`, result: aMao ? 0 : Number(item.bruto) },
     manual: {
-      formula: `IF(AND(${qtd}>0,${aplicado}<>ROUND(${preco}*(1-${CELULA_DESCONTO}),2)),1,0)`,
+      formula:
+        `IF(AND(N(${qtd})>0,ISNUMBER(${aplicado}),ISNUMBER(${preco})),` +
+        `IF(${aplicado}<>${descontado},1,0),0)`,
       result: comQuantidade && negociado ? 1 : 0,
     },
     // Mesma regra do sistema: box quando o produto tem, caixa master quando não.
     aberta: {
-      formula: `IF(${qtd}>0,IF(MOD(${qtd},IF(ISNUMBER(${box}),${box},${master}))<>0,1,0),0)`,
+      formula:
+        `IF(N(${qtd})>0,IF(N(${box})>0,IF(MOD(${qtd},${box})<>0,1,0),` +
+        `IF(N(${master})>0,IF(MOD(${qtd},${master})<>0,1,0),0)),0)`,
       result: comQuantidade && !item.embalagemFechada ? 1 : 0,
     },
   }
@@ -936,41 +982,74 @@ function itemDaTabela(
     errorStyle: 'stop',
     errorTitle: 'Quantidade inválida',
     error: 'Informe um número inteiro de unidades, sem vírgula.',
-    showInputMessage: true,
+    showInputMessage: !aMao,
     promptTitle: item.nome.slice(0, 32),
     prompt: item.caixaBox
       ? `Box com ${item.caixaBox} un. Caixa master com ${item.caixaMaster} un.`
       : `Caixa master com ${item.caixaMaster} unidades.`,
   }
 
-  if (aMao) {
-    const precoCelula = ws.getCell(aplicado)
-    liberar(precoCelula)
-    precoCelula.dataValidation = {
-      type: 'decimal',
+  if (!aMao) return
+
+  for (const chave of [
+    ...COLUNAS_DE_TEXTO,
+    'preco',
+    'caixaBox',
+    'caixaMaster',
+  ] as const) {
+    liberar(ws.getCell(ref(chave)))
+  }
+  for (const [chave, titulo] of [
+    ['caixaBox', 'Caixa box'],
+    ['caixaMaster', 'Caixa master'],
+  ] as const) {
+    ws.getCell(ref(chave)).dataValidation = {
+      type: 'whole',
       operator: 'greaterThan',
+      allowBlank: true,
       formulae: [0],
       showErrorMessage: true,
-      errorTitle: 'Preço inválido',
-      error: 'Informe o preço unitário negociado, maior que zero.',
-      showInputMessage: true,
-      promptTitle: 'Preço negociado',
-      prompt:
-        'Digite um valor para negociar este item: ele deixa de seguir o desconto geral.',
+      errorTitle: `${titulo} inválida`,
+      error: 'Informe quantas unidades vêm na embalagem, em número inteiro.',
     }
+  }
+  ws.getCell(preco).dataValidation = {
+    type: 'decimal',
+    operator: 'greaterThan',
+    allowBlank: true,
+    formulae: [0],
+    showErrorMessage: true,
+    errorTitle: 'Preço inválido',
+    error: 'Informe o preço de tabela por unidade, maior que zero.',
+  }
+
+  const precoCelula = ws.getCell(aplicado)
+  liberar(precoCelula)
+  precoCelula.dataValidation = {
+    type: 'decimal',
+    operator: 'greaterThan',
+    allowBlank: true,
+    formulae: [0],
+    showErrorMessage: true,
+    errorTitle: 'Preço inválido',
+    error: 'Informe o preço unitário negociado, maior que zero.',
+    showInputMessage: true,
+    promptTitle: 'Preço negociado',
+    prompt:
+      'Digite um valor para negociar este item: ele deixa de seguir o desconto geral.',
   }
 }
 
 /**
  * Regras que acompanham a edição: embalagem aberta em laranja com *, preço
  * negociado em roxo com † e quantidade vazia com a caixa azul de preencher.
- * A coluna da caixa master identifica as linhas de item (é número só nelas).
+ * Só valem nas linhas de item, marcadas na coluna auxiliar.
  */
 function alertas(ws: ExcelJS.Worksheet, primeira: number, ultima: number) {
   const r = primeira
-  const item = `ISNUMBER($${C.caixaMaster}${r})`
+  const item = `$${AUX.item}${r}=1`
   const aberta = `$${AUX.aberta}${r}=1`
-  const temBox = `ISNUMBER($${C.caixaBox}${r})`
+  const temBox = `N($${C.caixaBox}${r})>0`
   const faixa = (col: string) => `${col}${primeira}:${col}${ultima}`
   const estiloAlerta: Partial<ExcelJS.Style> = {
     fill: { type: 'pattern', pattern: 'solid', bgColor: cor(COR.alertaFundo) },
@@ -1039,6 +1118,9 @@ const TEXTO = {
   preencher:
     'Preencha a coluna Quant. com o número de unidades. As colunas Caixa box e ' +
     'Caixa master indicam quantas unidades vêm em cada embalagem.',
+  preencherAMao:
+    'Preencha uma linha por produto pedido: código, produto, preço, embalagens e ' +
+    'quantidade. Preço c/ desc., caixas e totais são calculados.',
   precos: 'Preços em reais, por unidade. Valores sujeitos à confirmação no faturamento.',
 }
 const aberturas = (n: number) =>
@@ -1047,7 +1129,7 @@ const aberturas = (n: number) =>
 
 /** Faixa de totais, legenda e aceite, como no fim do PDF. */
 function resumo(
-  { ws, doc }: Contexto,
+  { ws, doc, aMao }: Contexto,
   tabela: Tabela,
 ): { total: string; ultimaLinha: number } {
   const t = doc.totais
@@ -1176,7 +1258,7 @@ function resumo(
   }
 
   const primeiraLegenda = valores + 2
-  legenda(ws, doc, tabela, primeiraLegenda)
+  legenda(ws, doc, aMao, tabela, primeiraLegenda)
   const ultimaLinha = primeiraLegenda + 2
 
   // Aceite na altura da última linha da legenda, à direita, como no PDF.
@@ -1203,6 +1285,7 @@ function resumo(
 function legenda(
   ws: ExcelJS.Worksheet,
   doc: DocumentoRomaneio,
+  aMao: boolean,
   tabela: Tabela,
   inicio: number,
 ) {
@@ -1210,11 +1293,12 @@ function legenda(
   const u = `SUM(${faixa(C.quantidade)})`
   const m = `SUM(${faixa(AUX.manual)})`
   const a = `SUM(${faixa(AUX.aberta)})`
+  const instrucao = aMao ? TEXTO.preencherAMao : TEXTO.preencher
   const texto = (valor: string) => `"${valor}"`
   const tAberta = `IF(${a}=1,"* 1 item não fecha","* "&${a}&" itens não fecham")&" embalagem inteira (box, quando o produto tem; caixa master, quando não)."`
 
   const formulas = [
-    `IF(${u}=0,${texto(TEXTO.preencher)},IF(${m}>0,${texto(TEXTO.negociado)},IF(${a}>0,${tAberta},${texto(TEXTO.precos)})))`,
+    `IF(${u}=0,${texto(instrucao)},IF(${m}>0,${texto(TEXTO.negociado)},IF(${a}>0,${tAberta},${texto(TEXTO.precos)})))`,
     `IF(${u}=0,${texto(TEXTO.precos)},IF(${m}>0,IF(${a}>0,${tAberta},${texto(TEXTO.precos)}),IF(${a}>0,${texto(TEXTO.precos)},"")))`,
     `IF(AND(${u}>0,${m}>0,${a}>0),${texto(TEXTO.precos)},"")`,
   ]
@@ -1227,7 +1311,7 @@ function legenda(
     ).length
   const linhas =
     doc.totais.unidades === 0
-      ? [TEXTO.preencher, TEXTO.precos]
+      ? [instrucao, TEXTO.precos]
       : [
           negociados > 0 ? TEXTO.negociado : null,
           doc.totais.embalagensAbertas > 0

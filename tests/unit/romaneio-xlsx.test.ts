@@ -107,7 +107,8 @@ describe('romaneio em Excel', () => {
   it('preço c/ desc. é fórmula do desconto, e o negociado é valor fixo', async () => {
     const { ws, linhaDo, formula } = await planilha(entrada())
     const comDesconto = formula(`J${linhaDo('1')}`)
-    expect(comDesconto.formula).toBe(`ROUND(I${linhaDo('1')}*(1-$M$15),2)`)
+    const r = linhaDo('1')
+    expect(comDesconto.formula).toBe(`IF(ISNUMBER(I${r}),ROUND(I${r}*(1-$M$15),2),"")`)
     expect(comDesconto.result).toBe(6.05)
 
     const negociado = ws.getCell(`J${linhaDo('3')}`)
@@ -117,10 +118,10 @@ describe('romaneio em Excel', () => {
 
   it('marca embalagem aberta e preço negociado para a legenda', async () => {
     const { linhaDo, formula, ws } = await planilha(entrada())
-    expect(formula(`S${linhaDo('2')}`).result).toBe(1) // 150 não fecha box de 12
+    expect(formula(`T${linhaDo('2')}`).result).toBe(1) // 150 não fecha box de 12
     // O arquivo grava 0 e texto vazio; a leitura do exceljs devolve undefined para os dois.
-    expect(formula(`S${linhaDo('1')}`).result ?? 0).toBe(0)
-    expect(formula(`R${linhaDo('3')}`).result).toBe(1)
+    expect(formula(`T${linhaDo('1')}`).result ?? 0).toBe(0)
+    expect(formula(`S${linhaDo('3')}`).result).toBe(1)
     expect(formula(`N${linhaDo('4')}`).result ?? '').toBe('') // sem quantidade
 
     const legendas: string[] = []
@@ -149,16 +150,39 @@ describe('romaneio em Excel', () => {
   })
 
   it('romaneio sem número é preenchido à mão: número, emissão, vendedor e preço liberados', async () => {
-    const { ws, linhaDo } = await planilha(
+    const { ws } = await planilha(
       entrada({ numero: null, vendedor: null, cliente: null }),
     )
-    for (const endereco of ['M2', 'M3', 'M4', `J${linhaDo('1')}`]) {
+    for (const endereco of ['M2', 'M3', 'M4']) {
       expect(ws.getCell(endereco).protection?.locked, endereco).toBe(false)
     }
     expect(ws.getCell('M2').value).toBe('Nº ______')
     expect(ws.name).toBe('Romaneio')
     expect(ws.headerFooter.oddFooter).not.toContain('null')
-    // Sem número, sem código de barras: só as miniaturas.
-    expect(ws.getImages()).toHaveLength(4)
+    // Sem número não há código de barras, e sem produto não há miniatura.
+    expect(ws.getImages()).toHaveLength(0)
+  })
+
+  it('no romaneio à mão as linhas de produto saem vazias e liberadas', async () => {
+    const { ws } = await planilha(
+      entrada({ numero: null, vendedor: null, cliente: null }),
+    )
+    const tabela = 20
+    const cabecalho = ws.getRow(tabela)
+    expect(cabecalho.getCell('B').value).toBe('EAN')
+
+    // Quatro produtos no catálogo da linha: quatro linhas em branco.
+    for (let r = tabela + 1; r <= tabela + 4; r++) {
+      for (const col of ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M']) {
+        const celula = ws.getCell(`${col}${r}`)
+        expect(celula.value ?? null, `${col}${r}`).toBeNull()
+        expect(celula.protection?.locked, `${col}${r}`).toBe(false)
+      }
+      // EAN como texto: o Excel não vira 7898649053791 em 7,89865E+12.
+      expect(ws.getCell(`B${r}`).numFmt).toBe('@')
+      // Fórmulas ficam em branco até a linha ser preenchida.
+      const total = ws.getCell(`P${r}`).value as ExcelJS.CellFormulaValue
+      expect(total.formula).toBe(`N(M${r})*N(J${r})`)
+    }
   })
 })

@@ -337,10 +337,13 @@ produz o romaneio de exemplo, o romaneio em branco e a tabela em branco do clien
 em PDF e Excel.
 
 **Solução provisória enquanto as telas não existem:** o comercial preenche
-`romaneio-em-branco.xlsx` à mão. Romaneio sem número libera no Excel, além dos
-campos do cliente, o número, a emissão, o vendedor e o preço c/ desc. (valor
-digitado vira preço negociado, em roxo com †). Não tem código de barras: ele só
-existe para número emitido pelo sistema.
+`romaneio-em-branco.xlsx` à mão. No Excel, romaneio sem número sai com as linhas
+de produto vazias (uma por produto do catálogo de cada linha) e libera tudo que o
+vendedor digita: número, emissão, vendedor, cliente, condições, desconto, título
+das faixas e, em cada linha, código, EAN, CST, NCM, DUN-14, CEST, dimensões,
+produto, preço, caixas e quantidade. Preço c/ desc., contagens e totais são
+fórmulas; valor digitado no preço c/ desc. vira preço negociado, em roxo com †.
+Não tem código de barras: ele só existe para número emitido pelo sistema.
 
 O Excel reproduz o layout do PDF (mesmas colunas, cores, blocos e resumo, em escala
 4:3, com impressão A4 que volta ao tamanho do PDF). Colunas e paleta ficam em
